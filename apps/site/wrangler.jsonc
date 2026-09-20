@@ -1,0 +1,14 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "eltoro-site",
+  "compatibility_date": "2026-09-19",
+  "assets": {
+    "directory": "./dist"
+  },
+  "routes": [
+    {
+      "pattern": "eltoro.carter.works",
+      "custom_domain": true
+    }
+  ]
+}
