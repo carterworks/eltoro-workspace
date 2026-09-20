@@ -23,7 +23,10 @@ const tools = ['Astro', 'Node.js', 'pnpm', 'Nix', 'Cloudflare'];
 				{tools.map((tool) => <li>{tool}</li>)}
 			</ul>
 		</main>
-		<footer>Built from the tailnet. Served at the edge.</footer>
+		<footer>
+			Built from the tailnet. Served at the edge.
+			<a href="https://github.com/carterworks/eltoro-workspace">Source on GitHub</a>
+		</footer>
 	</body>
 </html>
 
@@ -115,5 +118,15 @@ const tools = ['Astro', 'Node.js', 'pnpm', 'Nix', 'Cloudflare'];
 		padding: 0 0 2rem;
 		font-size: 0.8rem;
 		color: #776d62;
+	}
+
+	footer a {
+		margin-left: 0.75rem;
+		color: #c7bbac;
+		text-underline-offset: 0.2em;
+	}
+
+	footer a:hover {
+		color: #f4efe6;
 	}
 </style>
