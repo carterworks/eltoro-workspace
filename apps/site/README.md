@@ -5,7 +5,6 @@ The static Astro site served at [eltoro.carter.works](https://eltoro.carter.work
 ```console
 pnpm dev
 pnpm build
-pnpm deploy
 ```
 
-Cloudflare Workers Builds should use `apps/site` as its root directory, `pnpm build` as the build command, and `pnpm deploy` as the deploy command.
+Cloudflare Pages builds and deploys `main` automatically. Its project runs `pnpm --filter apps-site build` from the repository root and publishes `apps/site/dist`.
