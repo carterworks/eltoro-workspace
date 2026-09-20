@@ -1,0 +1,48 @@
+# eltoro.carter.works — direct-link-only site.
+# No search indexing, no AI training/scraping. All compliant crawlers blocked.
+
+# Known AI scrapers and training crawlers (explicit block)
+User-agent: GPTBot
+User-agent: OAI-SearchBot
+User-agent: ChatGPT-User
+User-agent: ClaudeBot
+User-agent: Claude-Web
+User-agent: anthropic-ai
+User-agent: Google-Extended
+User-agent: GoogleOther
+User-agent: GoogleOther-Image
+User-agent: GoogleOther-Video
+User-agent: Gemini-Deep-Research
+User-agent: CCBot
+User-agent: PerplexityBot
+User-agent: Perplexity-User
+User-agent: Bytespider
+User-agent: Amazonbot
+User-agent: Applebot-Extended
+User-agent: FacebookBot
+User-agent: meta-externalagent
+User-agent: Meta-ExternalAgent
+User-agent: cohere-ai
+User-agent: cohere-training-data-crawler
+User-agent: Diffbot
+User-agent: ImagesiftBot
+User-agent: Omgili
+User-agent: Omgilibot
+User-agent: YouBot
+User-agent: Timpibot
+User-agent: VelenPublicWebCrawler
+User-agent: TurnitinBot
+User-agent: ICC-Crawler
+User-agent: AI2Bot
+User-agent: Ai2Bot-Dolma
+User-agent: DuckAssistBot
+User-agent: Webzio-Extended
+User-agent: PanguBot
+User-agent: LinerBot
+User-agent: MistralAI-User
+User-agent: NovaAct
+Disallow: /
+
+# Everything else
+User-agent: *
+Disallow: /
