@@ -30,22 +30,30 @@ Cloudflare Pages builds and deploys `main` automatically. Its project runs `pnpm
 
 ## Multiplayer (Bull Pong)
 
+Nobody makes a game or shares a code: the page is already playing the bull when it
+loads, and a second visitor is dropped into that match, taking the bull's paddle
+mid-rally.
+
 Cloudflare Pages cannot host the relay: a Pages Function cannot send on a WebSocket
 created by another request (`Cannot perform I/O on behalf of a different request`),
 and Durable Objects cannot be created inside a Pages project — they need a separately
-deployed Worker. So netplay rides the public **y-websocket** relay instead:
+deployed Worker. So netplay rides the public **y-websocket** relay instead.
 
-- Relay: `wss://demos.yjs.dev/ws`, room = path segment, `bullpong-<CODE>`.
-- Host (right paddle) owns the simulation and publishes snapshots through the
-  awareness channel at ~25 Hz; the guest (left paddle) publishes only its paddle
-  position. Both read the other's awareness state — no server logic of ours.
-- Solo mode (vs the AI) is the fallback whenever the relay is unreachable: the page
-  degrades to single player instead of failing.
-- Share link format: `/artifacts/bull-pong/?room=<CODE>`.
-- The host is authoritative; the guest renders relayed snapshots and extrapolates the
-  bull's motion from its last known velocity, so its view trails by roughly the
-  relay's one-way latency. A player who goes quiet for 4s is treated as gone (the
-  awareness protocol's own timeout is 30s, too slow for a live match).
+- Pens: a fixed pool of 8 relay rooms, `bullpong-pen-1` … `bullpong-pen-8`. On load a
+  client probes every pen in parallel and picks the best seat going: take a lone
+  player's bull paddle (`join`), take over a pen whose authority vanished
+  (`takeover`), or settle into an empty one (`empty`). All pens full → keep playing
+  the bull and rescan every ~15s.
+- One authority per pen: the oldest seated client simulates, publishes snapshots at
+  ~25 Hz, and follows the other human's reported paddle. Everyone else just renders
+  snapshots, predicts their own paddle, and reports it.
+- The bull plays whichever paddle has no human on it, so it hands its horn over when
+  someone arrives and takes it back when they leave; a player whose authority
+  disappears promotes itself after 4s and keeps its paddle.
+- `?pen=<token>` namespaces the pens (`bullpong-<token>-1` …) — handy for a private
+  or test pen without putting codes in the UI.
+- Solo play is never blocked by the network: with the relay down the page is just a
+  single-player game against the bull.
 
 If the relay ever needs to move onto our own domain, the change is one constant
 (`RELAY_URL`) plus a Durable Object Worker deployed with the operator's Cloudflare

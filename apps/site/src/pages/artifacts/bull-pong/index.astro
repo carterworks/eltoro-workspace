@@ -15,33 +15,11 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 		<main>
 			<ElToroLogo size={64} class="pong-logo" />
 			<h1>🐂 bull pong</h1>
-			<p class="hint" id="hint">
+			<p class="hint">
 				mouse / W·S / ↑·↓ to move · first to 7 · the bull is the ball<br />
-				powerups drop mid-field — the bull collects them for whoever touched it last
+				the bull plays the empty paddle — land here and you take it, mid-rally
 			</p>
-
-			<div class="lobby">
-				<button class="btn" id="btn-ai" type="button">🤖 vs the bull</button>
-				<button class="btn" id="btn-host" type="button">🔗 host a game</button>
-				<form class="join" id="join-form">
-					<input
-						class="code"
-						id="join-code"
-						name="room"
-						maxlength="10"
-						autocomplete="off"
-						autocapitalize="characters"
-						spellcheck="false"
-						placeholder="room code"
-						aria-label="Room code"
-					/>
-					<button class="btn" type="submit">🎟 join</button>
-				</form>
-			</div>
-			<p class="net" id="net" role="status" aria-live="polite">
-				solo mode — play the bull, or host a game to play a friend
-			</p>
-
+			<p class="net" id="net" role="status" aria-live="polite">warming up the pen…</p>
 			<canvas id="game" width="900" height="560"></canvas>
 			<p class="foot">
 				<a href="/">← El Toro HQ</a> · an artifact by the resident agent · netplay via the
@@ -92,53 +70,7 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 		color: var(--dim);
 		font-size: 0.85rem;
 		line-height: 1.5;
-		margin-bottom: 1rem;
-	}
-	.lobby {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.5rem;
-		justify-content: center;
-		align-items: center;
-		margin-bottom: 0.6rem;
-	}
-	.btn {
-		padding: 0.5rem 0.85rem;
-		border: 1px solid #3b332b;
-		border-radius: 8px;
-		background: #1b1813;
-		color: var(--ink);
-		font: 600 0.8rem/1 inherit;
-		cursor: pointer;
-	}
-	.btn:hover {
-		border-color: var(--gold);
-		color: #fff;
-	}
-	.btn.on {
-		border-color: var(--gold);
-		background: #2a2318;
-		color: var(--gold);
-	}
-	.join {
-		display: flex;
-		gap: 0.35rem;
-	}
-	.code {
-		width: 7.5rem;
-		padding: 0.5rem 0.6rem;
-		border: 1px solid #3b332b;
-		border-radius: 8px;
-		background: #151310;
-		color: var(--ink);
-		font: 600 0.8rem/1 ui-monospace, SFMono-Regular, Menlo, monospace;
-		text-transform: uppercase;
-		letter-spacing: 0.12em;
-	}
-	.code:focus-visible,
-	.btn:focus-visible {
-		outline: 2px solid var(--gold);
-		outline-offset: 1px;
+		margin-bottom: 0.9rem;
 	}
 	.net {
 		min-height: 1.2rem;
@@ -161,6 +93,7 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 		border-radius: 10px;
 		background: #151310;
 		box-shadow: 0 20px 60px rgb(0 0 0 / 0.45);
+		cursor: none;
 	}
 	.foot {
 		margin-top: 1rem;
@@ -194,80 +127,68 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 	} from '../../../lib/bull-pong/engine.js';
 	import {
 		RELAY_URL,
-		makeCode,
-		normalizeCode,
-		roomName,
-		shareLink,
-		codeFromUrl,
-		resolveRoom,
+		PEN_SLOTS,
+		penRoom,
+		penLabel,
+		penPrefixFromUrl,
+		otherSide,
+		classifySlot,
+		pickSlot,
+		resolvePen,
 		acceptSnapshot,
-		describeRoom,
+		describePen,
 	} from '../../../lib/bull-pong/netcode.js';
 
 	const canvas = document.getElementById('game');
 	const ctx = canvas.getContext('2d');
 	const netEl = document.getElementById('net');
-	const hintEl = document.getElementById('hint');
-	const btnAi = document.getElementById('btn-ai');
-	const btnHost = document.getElementById('btn-host');
-	const joinForm = document.getElementById('join-form');
-	const codeInput = document.getElementById('join-code');
 
 	const bullImg = new Image();
 	bullImg.src = '/artifacts/bull-pong/bull-ball.png';
 
+	const penPrefix = penPrefixFromUrl(location.href);
+
 	// ---------------------------------------------------------------- state ----
 
-	/** 'ai' = single player, 'host' = authoritative multiplayer, 'guest' = remote view */
-	let mode = 'ai';
-	const game = createState((Math.random() * 1e9) | 0); // ai/host simulation
+	const game = createState((Math.random() * 1e9) | 0); // local simulation
 	let view = game; // what the renderer draws
-	let target = null; // guest: latest host snapshot (extrapolated against snapAt)
-	let snapAt = 0; // guest: when that snapshot landed
+	let target = null; // player: latest authority snapshot
+	let snapAt = 0; // player: when that snapshot landed
 
-	let localY = H / 2; // local player's paddle centre
-	let room = null; // player-facing room code
+	let authority = true; // do we simulate the match?
+	let localSide = 'right'; // the paddle this client drives
+	let botSide = 'left'; // the paddle the bull plays (null when two humans)
+	let networked = false;
+	let penIndex = null;
+	let scanning = false;
 	let link = null; // { doc, provider, awareness }
-	let relayUp = null;
-	let picture = null; // who is who, per the awareness states
-	let seenSeq = -1; // guest: last host snapshot sequence applied
-	let lastResetReq = 0; // host: last reset request counter seen
-	let resetCounter = 0; // guest: our own reset request counter
-	let matchLive = false; // host: a match with the current guest is running
-	let lastGuestSignal = 0; // host: last awareness update from the seated guest
-	let lastHostSignal = 0; // guest: last snapshot from the host
+	let picture = null;
+	let otherStale = false; // the other human went quiet
+	let lastOtherSignal = 0;
+	let lastAuthoritySignal = 0;
+	let unseatedSince = 0;
+	let localY = H / 2;
+	let seenSeq = -1;
+	let resetCounter = 0;
+	let lastResetReq = 0;
 	let lastSent = 0;
 	let lastSnapshot = 0;
 	let acc = 0;
 	let lastFrame = 0;
+	let retryTimer = null;
+
+	function statusOf() {
+		return describePen({ networked, scanning, penIndex, picture, localSide, authority });
+	}
+
+	function refreshStatus(kind) {
+		setStatus(statusOf(), kind ?? (networked && picture?.seated ? 'good' : ''));
+	}
 
 	function setStatus(text, kind = '') {
 		netEl.textContent = text;
 		if (kind) netEl.dataset.kind = kind;
 		else delete netEl.dataset.kind;
-	}
-
-	function refreshStatus(kind) {
-		const link = room ? shareLink(location.origin, room) : null;
-		setStatus(
-			describeRoom({ mode, room, picture, relayUp, link }),
-			kind ?? (picture && !picture.waiting && mode !== 'ai' ? 'good' : ''),
-		);
-	}
-
-	function markMode() {
-		btnAi.classList.toggle('on', mode === 'ai');
-		btnHost.classList.toggle('on', mode === 'host');
-		if (mode === 'guest') {
-			hintEl.innerHTML =
-				'you are the <strong>left</strong> bull · mouse / W·S / ↑·↓ to move · first to 7<br />the host runs the match — the bull obeys whoever touched it last';
-		} else if (mode === 'host') {
-			hintEl.innerHTML =
-				'you are the <strong>right</strong> bull · mouse / W·S / ↑·↓ to move · first to 7<br />you run the match — share your room code so a friend can join';
-		} else {
-			hintEl.innerHTML =
-				'mouse / W·S / ↑·↓ to move · first to 7 · the bull is the ball<br />powerups drop mid-field — the bull collects them for whoever touched it last';
-		}
 	}
 
 	// ------------------------------------------------------------------ draw ----
@@ -291,7 +212,6 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 	function drawHUD(s, now) {
 		ctx.font = '600 11px ui-monospace, SFMono-Regular, Menlo, monospace';
 		ctx.textBaseline = 'top';
-
 		for (const [key, x, align] of [
 			['left', 24, 'left'],
 			['right', W - 24, 'right'],
@@ -306,7 +226,6 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 				ctx.fillText(parts.join('  '), x, 18);
 			}
 		}
-
 		const mood = [];
 		if (now < s.fx.slowUntil) mood.push(`❄ ${((s.fx.slowUntil - now) / 1000).toFixed(0)}s`);
 		if (now < s.fx.rageUntil) mood.push(`🔥 ${((s.fx.rageUntil - now) / 1000).toFixed(0)}s`);
@@ -333,12 +252,17 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 		ctx.globalAlpha = 1;
 	}
 
+	function whoIs(side) {
+		if (side === localSide) return 'YOU';
+		if (side === botSide) return 'BOT';
+		return authority ? 'THEY' : 'HOST';
+	}
+
 	function draw() {
 		const s = view;
 		const now = s.now;
 		ctx.clearRect(0, 0, W, H);
 
-		// center line
 		ctx.strokeStyle = '#2a261e';
 		ctx.setLineDash([8, 12]);
 		ctx.lineWidth = 2;
@@ -348,7 +272,6 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 		ctx.stroke();
 		ctx.setLineDash([]);
 
-		// bull-pen rails (posts + double rails, gates at the goals)
 		const RAIL = '#8a6a42';
 		const RAIL_HI = '#b89363';
 		ctx.lineCap = 'butt';
@@ -385,7 +308,6 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 		for (const x of [6, 16, W - 16, W - 6])
 			for (const y of [H / 4, H / 2, (H * 3) / 4]) ctx.fillRect(x - 3, y - 3, 6, 6);
 
-		// fences
 		for (const [key, x] of [
 			['left', 24],
 			['right', W - 24],
@@ -404,7 +326,6 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 			}
 		}
 
-		// paddles (wide ones glow gold)
 		ctx.fillStyle = '#c1483b';
 		if (s.left.h > BASE_PADDLE_H) {
 			ctx.shadowColor = '#d4a24e';
@@ -420,7 +341,6 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 		ctx.fillRect(s.right.x, s.right.y, PADDLE_W, s.right.h);
 		ctx.shadowBlur = 0;
 
-		// powerups
 		for (const p of s.powerups) {
 			const pulse = 1 + Math.sin(now / 280 + p.x) * 0.08;
 			ctx.save();
@@ -443,10 +363,8 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 			ctx.restore();
 		}
 
-		// bulls
 		for (const b of s.balls) drawBull(b.x, b.y, BALL_R, b.rot);
 
-		// scores
 		ctx.fillStyle = '#6b665c';
 		ctx.font = '700 44px Inter, system-ui, sans-serif';
 		ctx.textAlign = 'center';
@@ -456,14 +374,12 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 		drawHUD(s, now);
 		drawToasts(s, now);
 
-		if (mode !== 'ai') {
-			ctx.font = '600 10px ui-monospace, SFMono-Regular, Menlo, monospace';
-			ctx.fillStyle = '#6e5433';
-			ctx.textAlign = 'left';
-			ctx.fillText(mode === 'guest' ? 'GUEST' : 'HOST', 24, H - 12);
-			ctx.textAlign = 'right';
-			ctx.fillText(mode === 'guest' ? 'HOST' : 'GUEST', W - 24, H - 12);
-		}
+		ctx.font = '600 10px ui-monospace, SFMono-Regular, Menlo, monospace';
+		ctx.fillStyle = '#6e5433';
+		ctx.textAlign = 'left';
+		ctx.fillText(whoIs('left'), 24, H - 12);
+		ctx.textAlign = 'right';
+		ctx.fillText(whoIs('right'), W - 24, H - 12);
 
 		if (s.winner) {
 			ctx.fillStyle = 'rgb(17 16 14 / 0.82)';
@@ -471,12 +387,8 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 			ctx.fillStyle = '#d4a24e';
 			ctx.font = '700 40px Inter, system-ui, sans-serif';
 			ctx.textAlign = 'center';
-			const who = s.winner === 'right' ? 'right bull' : 'left bull';
-			ctx.fillText(
-				mode === 'ai' ? (s.winner === 'right' ? 'you win 🏆' : 'the bull wins') : `${who} wins 🏆`,
-				W / 2,
-				H / 2 - 8,
-			);
+			const won = s.winner === localSide;
+			ctx.fillText(won ? 'you win 🏆' : `${whoIs(s.winner)} wins`, W / 2, H / 2 - 8);
 			ctx.fillStyle = '#e8e2d6';
 			ctx.font = '400 16px Inter, system-ui, sans-serif';
 			ctx.fillText('click or press R to run it back', W / 2, H / 2 + 28);
@@ -486,6 +398,8 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 	// -------------------------------------------------------------- netplay ----
 
 	function teardownLink() {
+		if (retryTimer) clearTimeout(retryTimer);
+		retryTimer = null;
 		if (!link) return;
 		try {
 			link.provider.destroy();
@@ -494,44 +408,193 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 			/* already gone */
 		}
 		link = null;
-		relayUp = false;
 		picture = null;
 	}
 
-	function connect(code, intent) {
-		teardownLink();
-		room = code;
-		mode = intent;
-		seenSeq = -1;
-		lastResetReq = 0;
-		matchLive = false;
-		markMode();
-
-		const doc = new Y.Doc();
-		const provider = new WebsocketProvider(RELAY_URL, roomName(code), doc);
-		link = { doc, provider, awareness: provider.awareness };
-		provider.awareness.setLocalState({ r: intent });
-		provider.on('status', (event) => {
-			relayUp = event.status === 'connected' ? true : event.status === 'connecting' ? null : false;
-			syncPeers();
-		});
-		provider.on('connection-error', () => {
-			relayUp = false;
-			syncPeers();
-		});
-		provider.awareness.on('change', syncPeers);
-		provider.awareness.on('update', (changes) => {
-			const now = performance.now();
-			if (mode === 'host' && picture?.guestId != null) {
-				const fromGuest = [...(changes?.added ?? []), ...(changes?.updated ?? [])];
-				if (fromGuest.includes(picture.guestId)) lastGuestSignal = now;
+	function closeState() {
+		if (link?.provider?.awareness) {
+			try {
+				link.provider.awareness.setLocalState(null);
+			} catch {
+				/* already gone */
 			}
-			syncPeers();
-		});
+		}
+	}
 
+	/** Leave the pen and go back to a private match against the bull. */
+	function leavePen() {
+		closeState();
+		teardownLink();
+		networked = false;
+		penIndex = null;
+		scanning = false;
+		authority = true;
+		localSide = 'right';
+		botSide = 'left';
+		otherStale = false;
+		target = null;
+		seenSeq = -1;
+		localY = H / 2;
 		resetMatch(game);
 		view = game;
-		setStatus(describeRoom({ mode, room, picture: null, relayUp: null }));
+		refreshStatus();
+	}
+
+	/** Occupied the chosen pen: publish our seats and start syncing. */
+	function settle(index, action, classify) {
+		teardownLink();
+		const role = action === 'join' ? 'guest' : 'host';
+		const side = action === 'empty' ? 'right' : classify.freeSide;
+		const doc = new Y.Doc();
+		const provider = new WebsocketProvider(RELAY_URL, penRoom(penPrefix, index), doc, { connect: true });
+		link = { doc, provider, awareness: provider.awareness };
+		networked = true;
+		scanning = false;
+		penIndex = index;
+		authority = role === 'host';
+		localSide = side;
+		botSide = authority ? otherSide(side) : null;
+		otherStale = false;
+		lastOtherSignal = performance.now();
+		lastAuthoritySignal = performance.now();
+		target = null;
+		seenSeq = -1;
+		localY = H / 2;
+		provider.awareness.setLocalState({ r: role, side });
+		provider.on('status', () => syncPen());
+		provider.on('connection-error', () => {
+			setStatus('the relay is unreachable — playing the bull meanwhile', 'bad');
+		});
+		provider.awareness.on('change', syncPen);
+		provider.awareness.on('update', (changes) => {
+			const now = performance.now();
+			const touched = [...(changes?.added ?? []), ...(changes?.updated ?? [])];
+			if (picture?.otherId != null && touched.includes(picture.otherId)) lastOtherSignal = now;
+			if (picture?.authorityId != null && touched.includes(picture.authorityId)) lastAuthoritySignal = now;
+			syncPen();
+		});
+		refreshStatus();
+	}
+
+	/** Re-read the pen and react: seating, promotion, abandonment. */
+	function syncPen() {
+		if (!link) return;
+		const states = link.awareness.getStates();
+		picture = resolvePen(states, link.awareness.clientID);
+		const now = performance.now();
+
+		if (!picture.seated) {
+			// a race for the last paddle: back off and look for another pen
+			if (!unseatedSince) unseatedSince = now;
+			else if (now - unseatedSince > 2500) {
+				unseatedSince = 0;
+				leavePen();
+				scheduleScan(500);
+			}
+			return;
+		}
+		unseatedSince = 0;
+
+		// an older client may have claimed our side first: adopt what it decided
+		if (picture.selfSide && picture.selfSide !== localSide) {
+			localSide = picture.selfSide;
+			if (authority) botSide = picture.botSide ?? otherSide(localSide);
+			if (link?.awareness) link.awareness.setLocalStateField('side', localSide);
+		}
+
+		// the authority drives whichever paddle has no human on it, and follows
+		// the other human's paddle when there is one
+		if (authority) {
+			const otherState = picture.otherId != null ? states.get(picture.otherId) : null;
+			if (!otherStale && picture.otherSide) {
+				const otherY = Number(otherState?.i?.y);
+				if (Number.isFinite(otherY)) {
+					game[picture.otherSide].touchY = Math.max(PEN, Math.min(H - PEN, otherY));
+				}
+			}
+			const asked = Number(otherState?.q) || 0;
+			if (asked > lastResetReq) {
+				lastResetReq = asked;
+				resetMatch(game);
+				toast(game, '🔄 REMATCH', '#d4a24e');
+				publish(true);
+			}
+			botSide = otherStale ? otherSide(localSide) : picture.botSide;
+			if (botSide === null && picture.otherId == null) botSide = otherSide(localSide);
+		} else {
+			// player: render whatever the authority is serving
+			const hostState = picture.authorityId != null ? states.get(picture.authorityId) : null;
+			if (acceptSnapshot(hostState, 'guest', seenSeq)) applySnapshot(hostState.s);
+
+			// the authority went quiet: take the match over, keeping our paddle
+			if (!picture.hasAuthority && now - lastAuthoritySignal > 4000) {
+				authority = true;
+				botSide = picture.botSide ?? otherSide(localSide);
+				lastOtherSignal = now;
+				toast(game, '🏁 THE BULL IS YOURS NOW', '#d4a24e');
+				if (link?.awareness) link.awareness.setLocalStateField('r', 'host');
+			}
+		}
+
+		refreshStatus();
+	}
+
+	function scheduleScan(delay = 12000) {
+		if (retryTimer) clearTimeout(retryTimer);
+		retryTimer = setTimeout(() => {
+			retryTimer = null;
+			scanPens();
+		}, delay + Math.random() * 4000);
+	}
+
+	/** Sniff every pen in parallel, then take the best seat going. */
+	async function scanPens() {
+		if (networked) return;
+		scanning = true;
+		refreshStatus();
+
+		const probes = Array.from({ length: PEN_SLOTS }, (_, index) => probePen(index));
+		const results = await Promise.all(probes);
+		if (networked) return; // someone settled us while probing
+
+		const choice = pickSlot(results.filter((r) => r));
+		scanning = false;
+		if (choice) {
+			settle(choice.index, choice.action, choice.classify);
+			return;
+		}
+		refreshStatus();
+		scheduleScan(15000); // every pen is full — keep playing, try again soon
+	}
+
+	function probePen(index) {
+		return new Promise((resolve) => {
+			const doc = new Y.Doc();
+			const provider = new WebsocketProvider(RELAY_URL, penRoom(penPrefix, index), doc, { connect: true });
+			let settled = false;
+			const finish = () => {
+				if (settled) return;
+				settled = true;
+				let classify = { kind: 'empty', freeSide: 'right', incumbent: null };
+				try {
+					classify = classifySlot(provider.awareness.getStates());
+				} catch {
+					/* treat as empty */
+				}
+				try {
+					provider.destroy();
+					doc.destroy();
+				} catch {
+					/* already gone */
+				}
+				resolve({ index, classify });
+			};
+			provider.on('sync', () => setTimeout(finish, 300));
+			provider.on('status', (e) => {
+				if (e.status === 'connected') setTimeout(finish, 600);
+			});
+			setTimeout(finish, 1500);
+		});
 	}
 
 	function applySnapshot(snap) {
@@ -540,7 +603,7 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 		if (!target || target.balls.length !== next.balls.length) view = next;
 		target = next;
 		snapAt = now;
-		lastHostSignal = now;
+		lastAuthoritySignal = now;
 		view.now = now;
 		view.left.score = next.left.score;
 		view.right.score = next.right.score;
@@ -551,7 +614,9 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 		view.side = next.side;
 		view.toasts = next.toasts;
 		view.winner = next.winner;
-		view.right.y = next.right.y;
+		for (const side of ['left', 'right']) {
+			if (side !== localSide) view[side].y = next[side].y;
+		}
 		view.balls = view.balls.length === next.balls.length ? view.balls : next.balls;
 		view.balls.forEach((b, i) => {
 			b.rot = next.balls[i].rot;
@@ -560,60 +625,8 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 		seenSeq = snap.n ?? seenSeq;
 	}
 
-	/** Re-read the room from the awareness states and react to changes. */
-	function syncPeers() {
-		if (!link) return;
-		const states = link.awareness.getStates();
-		const before = picture;
-		picture = resolveRoom(states, link.awareness.clientID);
-		peerHere = mode === 'host' ? picture.guestId != null : picture.hostId != null;
-
-		if (mode === 'host') {
-			// start a match when a guest arrives; drop it when they leave
-			if (picture.guestId != null && !matchLive) {
-				matchLive = true;
-				lastGuestSignal = performance.now();
-				resetMatch(game);
-				view = game;
-				localY = H / 2;
-				toast(game, '🤝 OPPONENT IN THE PEN', '#d4a24e');
-				publish(true);
-			} else if (picture.guestId == null && matchLive) {
-				matchLive = false;
-			}
-			// clamp the guest's paddle straight from their last input
-			const guestState = picture.guestId != null ? states.get(picture.guestId) : null;
-			const guestY = Number(guestState?.i?.y);
-			if (Number.isFinite(guestY)) {
-				game.left.touchY = Math.max(PEN, Math.min(H - PEN, guestY));
-			}
-			// guest asked for a rematch
-			const req = Number(guestState?.q) || 0;
-			if (req > lastResetReq) {
-				lastResetReq = req;
-				resetMatch(game);
-				toast(game, '🔄 REMATCH', '#d4a24e');
-				publish(true);
-			}
-		} else if (mode === 'guest') {
-			const hostState = picture.hostId != null ? states.get(picture.hostId) : null;
-			if (acceptSnapshot(hostState, 'guest', seenSeq)) {
-				applySnapshot(hostState.s);
-				if (before?.waiting !== false && picture.waiting === false) {
-					setStatus('', 'good');
-				}
-			}
-		}
-
-		const wasWaiting = before ? before.waiting : true;
-		refreshStatus();
-		if (wasWaiting !== picture.waiting && !picture.waiting && mode === 'guest') {
-			/* status text already covers it */
-		}
-	}
-
 	function publish(force = false) {
-		if (!link) return;
+		if (!link || !authority) return;
 		const now = performance.now();
 		if (!force && now - lastSnapshot < 40) return;
 		lastSnapshot = now;
@@ -621,7 +634,7 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 	}
 
 	function publishInput() {
-		if (!link || mode !== 'guest') return;
+		if (!link || authority) return;
 		const now = performance.now();
 		if (now - lastSent < 33) return;
 		lastSent = now;
@@ -629,54 +642,37 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 	}
 
 	function requestRematch() {
-		if (mode === 'host') {
+		if (authority) {
 			resetMatch(game);
 			publish(true);
 			toast(game, '🔄 REMATCH', '#d4a24e');
-		} else if (mode === 'guest' && link) {
+		} else if (link) {
 			resetCounter++;
 			link.awareness.setLocalStateField('q', resetCounter);
-		} else {
-			resetMatch(game);
 		}
 	}
-
-	function backToSolo(reason) {
-		teardownLink();
-		mode = 'ai';
-		peerHere = false;
-		matchLive = false;
-		room = null;
-		view = game;
-		resetMatch(game);
-		markMode();
-		setStatus(reason);
-	}
-
-	let peerHere = false; // kept for the debug hook
 
 	// ------------------------------------------------------------------ loop ----
 
 	function stepAndSend(now) {
 		const dt = lastFrame ? now - lastFrame : FRAME_MS;
-		if (mode === 'guest') {
+
+		if (!authority) {
+			// player: render relayed snapshots, predict our own paddle, report it
 			if (target) {
 				view.now = now;
-				// extrapolate from the last snapshot with the bull's own velocity,
-				// so the guest sees the bull where the host has it now (not 80ms ago)
 				const elapsedFrames = Math.min(now - snapAt, 200) / FRAME_MS;
 				view.balls.forEach((b, i) => {
 					const t = target.balls[i];
 					if (!t) return;
-					const px = t.x + t.vx * elapsedFrames;
-					const py = t.y + t.vy * elapsedFrames;
-					b.x += (px - b.x) * 0.5;
-					b.y += (py - b.y) * 0.5;
+					b.x += (t.x + t.vx * elapsedFrames - b.x) * 0.5;
+					b.y += (t.y + t.vy * elapsedFrames - b.y) * 0.5;
 				});
-				view.right.y += (target.right.y - view.right.y) * 0.5;
+				for (const side of ['left', 'right']) {
+					if (side !== localSide) view[side].y += (target[side].y - view[side].y) * 0.5;
+				}
 			}
-			// your own paddle answers instantly, the host follows your reports
-			view.left.y = Math.max(PEN, Math.min(H - view.left.h - PEN, localY - view.left.h / 2));
+			view[localSide].y = Math.max(PEN, Math.min(H - view[localSide].h - PEN, localY - view[localSide].h / 2));
 			publishInput();
 			return;
 		}
@@ -684,12 +680,12 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 		acc = Math.min(acc + dt, 200);
 		let n = 0;
 		while (acc >= FRAME_MS && n < 6) {
-			step(game, { ai: mode === 'ai' ? 'left' : 'none' });
+			step(game, { ai: botSide ?? 'none' });
 			acc -= FRAME_MS;
 			n++;
 		}
 		view = game;
-		if (mode === 'host' && matchLive) publish();
+		if (networked) publish();
 	}
 
 	function loop(now) {
@@ -708,7 +704,7 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 
 	function aimLocal(y) {
 		localY = Math.max(PEN, Math.min(H - PEN, y));
-		if (mode !== 'guest') game.right.touchY = localY;
+		if (authority) game[localSide].touchY = localY;
 	}
 
 	canvas.addEventListener('mousemove', (e) => aimLocal(pointerY(e.clientY)));
@@ -725,7 +721,6 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 	});
 
 	addEventListener('keydown', (e) => {
-		if (document.activeElement === codeInput) return;
 		const key = e.key.toLowerCase();
 		if (key === 'arrowup' || key === 'w') {
 			aimLocal(localY - PADDLE_SPEED);
@@ -739,66 +734,76 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 		if (e.key === ' ') e.preventDefault();
 	});
 
-	// ---------------------------------------------------------------- lobby ----
-
-	btnAi.addEventListener('click', (e) => {
-		e.target.blur();
-		backToSolo('solo mode — play the bull, or host a game to play a friend');
+	addEventListener('beforeunload', () => {
+		closeState();
+		teardownLink();
 	});
 
-	btnHost.addEventListener('click', (e) => {
-		e.target.blur();
-		const code = makeCode();
-		codeInput.value = code;
-		connect(code, 'host');
-		refreshStatus();
-	});
+	// -------------------------------------------------------------- watchdogs ----
 
-	joinForm.addEventListener('submit', (e) => {
-		e.preventDefault();
-		e.target.querySelector('button')?.blur();
-		const code = normalizeCode(codeInput.value);
-		if (!code) {
-			setStatus('room codes are 4+ letters/numbers', 'bad');
-			return;
+	// A player who stops talking for 4s has gone: the awareness protocol's own
+	// timeout is 30s, far too long to hold a paddle mid-rally.
+	setInterval(() => {
+		const now = performance.now();
+		if (!link) return;
+		if (authority && picture?.otherId != null && now - lastOtherSignal > 4000) {
+			otherStale = true;
+			if (picture.otherSide) game[picture.otherSide].touchY = null;
+			if (botSide == null) botSide = otherSide(localSide);
+			toast(game, '🚪 THEY LEFT — THE BULL TAKES OVER', '#d4a24e');
+			refreshStatus();
+		} else if (authority && otherStale && picture?.otherId == null) {
+			otherStale = false;
 		}
-		connect(code, 'guest');
-		refreshStatus();
-	});
+		if (!authority) {
+			// a player's own authority vanished: syncPen promotes us after 4s
+			if (picture && !picture.hasAuthority) syncPen();
+		}
+	}, 1000);
 
-	addEventListener('beforeunload', () => teardownLink());
+	// If we are stuck without a pen (every pen full, or the relay hiccuped),
+	// keep sniffing — the game never stops being playable in the meantime.
+	setInterval(() => {
+		if (!networked) scheduleScan(2000);
+	}, 20000);
 
 	// -------------------------------------------------------------- debug hook ----
 
 	window.__bullpong = {
-		get mode() {
-			return mode;
+		get authority() {
+			return authority;
 		},
-		get room() {
-			return room;
+		get localSide() {
+			return localSide;
 		},
-		get relayUp() {
-			return relayUp;
+		get botSide() {
+			return botSide;
+		},
+		get networked() {
+			return networked;
+		},
+		get scanning() {
+			return scanning;
+		},
+		get pen() {
+			return penIndex == null ? null : penIndex + 1;
+		},
+		get penPrefix() {
+			return penPrefix;
 		},
 		get peers() {
 			return link ? link.awareness.getStates().size : 0;
 		},
+		get seated() {
+			return !!picture?.seated;
+		},
 		get peerStates() {
 			return link
-				? [...link.awareness.getStates()].map(([id, s]) => ({ id, r: s?.r, i: s?.i, q: s?.q, hasSnapshot: !!s?.s }))
+				? [...link.awareness.getStates()].map(([id, s]) => ({ id, r: s?.r, side: s?.side, hasSnapshot: !!s?.s, input: s?.i }))
 				: [];
 		},
 		get status() {
 			return netEl.textContent;
-		},
-		get scores() {
-			return { left: view.left.score, right: view.right.score };
-		},
-		get winner() {
-			return view.winner;
-		},
-		get seq() {
-			return seenSeq;
 		},
 		get snapshot() {
 			return {
@@ -808,41 +813,18 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 				winner: view.winner,
 			};
 		},
-		get netDebug() {
-			return {
-				snapshotAgeMs: snapAt ? Math.round(performance.now() - snapAt) : null,
-				targetBall: target?.balls?.[0] ? { x: target.balls[0].x, y: target.balls[0].y, vx: target.balls[0].vx } : null,
-				viewBall: view.balls[0] ? { x: Math.round(view.balls[0].x), y: Math.round(view.balls[0].y) } : null,
-			};
+		get seq() {
+			return seenSeq;
 		},
-		connect,
-		backToSolo,
+		scan: () => scanPens(),
+		leave: () => leavePen(),
 	};
 
-	// ?room=CODE in a share link drops you straight into the room
-	const urlCode = codeFromUrl(location.href);
-	markMode();
+	// --------------------------------------------------------------- start up ----
+
 	resetMatch(game);
 	localY = H / 2;
-	if (urlCode) {
-		codeInput.value = urlCode;
-		connect(urlCode, 'guest');
-		refreshStatus();
-	} else {
-		setStatus('solo mode — play the bull, or host a game to play a friend');
-	}
+	setStatus(statusOf());
 	requestAnimationFrame(loop);
-
-	// A player who stops talking for 4s has gone: the awareness protocol's own
-	// timeout is 30s, far too long to keep a seat warm mid-match.
-	setInterval(() => {
-		const now = performance.now();
-		if (mode === 'host' && matchLive && now - lastGuestSignal > 4000) {
-			matchLive = false;
-			if (picture) picture = { ...picture, guestId: null, waiting: true };
-			refreshStatus('bad');
-		} else if (mode === 'guest' && peerHere && now - lastHostSignal > 4000) {
-			setStatus('the host went quiet — waiting for them to come back…', 'bad');
-		}
-	}, 1000);
+	scanPens();
 </script>

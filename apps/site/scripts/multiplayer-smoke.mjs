@@ -1,28 +1,32 @@
 #!/usr/bin/env node
-// Live netplay smoke test — two real clients through the real relay.
+// Live ambient-netplay smoke test — two real clients through the real relay.
 //
 //   pnpm --filter apps-site test:live
 //
-// Host and guest are plain Node clients using the same modules the page uses
-// (`src/lib/bull-pong/*`), so this exercises the actual protocol: awareness
-// handshake, seating, host snapshots, guest paddle input, rematch requests,
-// and cleanup when someone leaves. Needs network access to the relay; exits
-// non-zero on the first failed expectation.
+// Both clients use the same modules the page uses (`src/lib/bull-pong/*`):
+// one settles into an empty pen and plays the bull, the other scans that pen,
+// finds a lone human, and takes the bull's paddle. Then input, snapshots,
+// promotion and teardown are checked. Runs in a private pen namespace so it
+// never collides with whoever is actually playing. Needs network access to the
+// relay; exits non-zero on the first failed expectation.
 
 import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 
 import {
 	RELAY_URL,
-	normalizeCode,
-	roomName,
-	resolveRoom,
-	acceptSnapshot,
-	describeRoom,
+	penRoom,
+	penLabel,
+	classifySlot,
+	resolvePen,
+	otherSide,
+	describePen,
 } from '../src/lib/bull-pong/netcode.js';
 import { createState, resetMatch, step, serialize, deserialize } from '../src/lib/bull-pong/engine.js';
 
-const ROOM = `SMOKE${Math.floor(Math.random() * 900 + 100)}`;
+const PREFIX = `bullpong-smoke${Math.floor(Math.random() * 900 + 100)}`;
+const PEN = 0;
+const ROOM = penRoom(PREFIX, PEN);
 const TIMEOUT = Number(process.env.SMOKE_TIMEOUT ?? 25000);
 const SNAPSHOT_HZ = 25;
 let passed = 0;
@@ -31,7 +35,6 @@ function check(label, ok, detail = '') {
 	if (ok) {
 		passed++;
 		console.log(`✔ ${label}${detail ? ` — ${detail}` : ''}`);
-
 	} else {
 		console.error(`✖ ${label}${detail ? ` — ${detail}` : ''}`);
 		throw new Error(label);
@@ -40,143 +43,155 @@ function check(label, ok, detail = '') {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function waitFor(fn, { timeout = TIMEOUT, step: stepMs = 100, label = 'condition' } = {}) {
+async function waitFor(fn, { timeout = TIMEOUT, every = 100, label = 'condition' } = {}) {
 	const deadline = Date.now() + timeout;
 	while (Date.now() < deadline) {
 		const value = await fn();
 		if (value) return value;
-		await sleep(stepMs);
+		await sleep(every);
 	}
 	throw new Error(`timed out after ${timeout}ms waiting for ${label}`);
 }
 
-const host = { doc: new Y.Doc() };
-host.provider = new WebsocketProvider(RELAY_URL, roomName(ROOM), host.doc, { connect: true, disableBc: true });
-const guest = { doc: new Y.Doc() };
-guest.provider = new WebsocketProvider(RELAY_URL, roomName(ROOM), guest.doc, { connect: true, disableBc: true });
+function client(name) {
+	const doc = new Y.Doc();
+	const provider = new WebsocketProvider(RELAY_URL, ROOM, doc, { connect: true, disableBc: true });
+	return { name, doc, provider, awareness: provider.awareness, sent: { snapshots: 0, inputs: 0 } };
+}
 
+/** What a visitor would decide if it probed this pen right now. */
+const probe = (c) => classifySlot(c.awareness.getStates());
+const view = (c) => resolvePen(c.awareness.getStates(), c.awareness.clientID);
+
+const a = client('a');
+const b = client('b');
 let exitCode = 0;
 
 try {
-	host.provider.awareness.setLocalState({ r: 'host' });
-	guest.provider.awareness.setLocalState({ r: 'guest' });
+	await waitFor(() => a.provider.wsconnected || a.provider.connected, { label: `${RELAY_URL} to answer` });
 
-	await waitFor(
-		() => (host.provider.wsconnected || host.provider.connected) && (guest.provider.wsconnected || guest.provider.connected),
-		{ label: `both clients to reach ${RELAY_URL}` },
-	);
-	check('both clients connect to the relay', true, RELAY_URL);
-
-	const states = await waitFor(
-		() => {
-			const hostStates = host.provider.awareness.getStates();
-			const guestStates = guest.provider.awareness.getStates();
-			return hostStates.size > 1 && guestStates.size > 1 ? { hostStates, guestStates } : null;
-		},
-		{ label: 'awareness exchange' },
-	);
-	check('the two clients see each other in the room', states.hostStates.size === 2 && states.guestStates.size === 2);
-
-	const hostView = resolveRoom(states.hostStates, host.provider.awareness.clientID);
-	const guestView = resolveRoom(states.guestStates, guest.provider.awareness.clientID);
+	// --- an empty pen: the first arrival settles in as the authority ----------
+	check('an untouched pen scans as empty', probe(a).kind === 'empty', ROOM);
+	a.awareness.setLocalState({ r: 'host', side: 'right' });
+	const soloView = await waitFor(() => {
+		const v = view(a);
+		return v.seated && v.selfIsAuthority ? v : null;
+	}, { label: 'the first client to seat itself' });
+	check('the first client is the authority with the bull on the other horn', soloView.botSide === 'left' && soloView.otherId === null);
 	check(
-		'host and guest agree on the seating',
-		hostView.selfIsHost && guestView.selfIsGuest && hostView.guestId != null && hostView.guestId === guestView.guestId,
-		`host=${hostView.hostId} guest=${hostView.guestId}`,
+		'its status line offers the free paddle',
+		/bull has the left horn/.test(describePen({ networked: true, penIndex: PEN, localSide: 'right', authority: true, picture: soloView })),
+		describePen({ networked: true, penIndex: PEN, localSide: 'right', authority: true, picture: soloView }),
 	);
-	const line = describeRoom({ mode: 'host', room: ROOM, picture: hostView, relayUp: true });
-	check('the room reads as ready to play', line.includes('opponent in the pen'), line);
 
-	// --- guest -> host paddle input -------------------------------------------
-	const state = createState(7);
+	// --- the second arrival scans, finds a lone human, takes the bull's paddle -
+	const beforeJoin = await waitFor(() => {
+		const c = probe(b);
+		return c.kind === 'join' ? c : null;
+	}, { label: 'the pen to read as joinable' });
+	check('a visitor sees one human and a free paddle', beforeJoin.kind === 'join' && beforeJoin.freeSide === 'left', JSON.stringify(beforeJoin.kind));
+	b.awareness.setLocalState({ r: 'guest', side: beforeJoin.freeSide });
+
+	const bothSeated = await waitFor(() => {
+		const av = view(a);
+		const bv = view(b);
+		return av.otherId != null && !bv.selfIsAuthority && bv.seated ? { av, bv } : null;
+	}, { label: 'both clients to be seated' });
+	check(
+		'the visitor replaces the bull: no bot left on the field',
+		bothSeated.av.botSide === null && bothSeated.av.otherSide === 'left',
+		`authority botSide=${bothSeated.av.botSide}`,
+	);
+	check('the visitor knows it is a player, not the authority', bothSeated.bv.selfIsAuthority === false && bothSeated.bv.hasAuthority === true);
+	check(
+		'both sides agree who plays which paddle',
+		bothSeated.bv.otherSide === 'right' && bothSeated.av.otherSide === 'left' && bothSeated.bv.selfSide === 'left',
+	);
+
+	// --- the match itself: authority simulates, player reports its paddle ------
+	const state = createState(11);
 	resetMatch(state);
-	guest.provider.awareness.setLocalStateField('i', { y: 120 });
-	const guestY = await waitFor(
-		() => {
-			const guestState = host.provider.awareness.getStates().get(hostView.guestId);
-			return Number(guestState?.i?.y) === 120 ? 120 : null;
-		},
-		{ label: 'guest input to reach the host' },
-	);
-	check('guest paddle input reaches the host', guestY === 120);
-	state.left.touchY = guestY;
+	state.left.touchY = 120; // as if the visitor moved its paddle there
 	step(state, { ai: 'none' });
-	check(
-		'the host applies the guest paddle position',
-		Math.abs(state.left.y + state.left.h / 2 - 120) < 1,
-		`paddle centre ${(state.left.y + state.left.h / 2).toFixed(1)}`,
-	);
+	check('the authority applies the visitor paddle straight away', Math.abs(state.left.y + state.left.h / 2 - 120) < 1);
 
-	// --- host -> guest snapshots ----------------------------------------------
-	let seenSeq = -1;
+	b.awareness.setLocalStateField('i', { y: 90 });
+	const seenInput = await waitFor(() => {
+		const other = a.awareness.getStates().get(bothSeated.av.otherId);
+		const y = Number(other?.i?.y);
+		return y === 90 ? y : null;
+	}, { label: 'the visitor paddle to reach the authority over the relay' });
+	state.left.touchY = seenInput;
+	step(state, { ai: 'none' });
+	check('the visitor paddle arrives over the relay', Math.abs(state.left.y + state.left.h / 2 - 90) < 1);
+
 	let lastSnap = null;
-	let publishedAt = 0;
-	let receivedAt = 0;
-	guest.provider.awareness.on('update', () => {
-		const hostState = guest.provider.awareness.getStates().get(guestView.hostId);
-		if (acceptSnapshot(hostState, 'guest', seenSeq)) {
+	let seenSeq = -1;
+	b.awareness.on('update', () => {
+		const hostState = b.awareness.getStates().get(bothSeated.bv.authorityId);
+		if (hostState?.r === 'host' && hostState.s && hostState.s.n > seenSeq) {
 			lastSnap = hostState.s;
 			seenSeq = hostState.s.n;
-			receivedAt = Date.now();
 		}
 	});
+	a.awareness.setLocalStateField('s', serialize(state));
+	await waitFor(() => lastSnap != null, { label: 'the first snapshot to reach the visitor' });
 
-	const publish = () => {
-		publishedAt = Date.now();
-		host.provider.awareness.setLocalStateField('s', serialize(state));
-	};
-	publish();
-	await waitFor(() => lastSnap != null, { label: 'first host snapshot' });
-	check('host snapshots reach the guest', lastSnap != null, `seq ${lastSnap.n}`);
-
-	// play ~2s of a real match at snapshot rate, then compare guest vs host
 	const started = Date.now();
-	while (Date.now() - started < 2000) {
+	while (Date.now() - started < 1500) {
 		for (let i = 0; i < 4; i++) step(state, { ai: 'none' });
-		publish();
+		a.awareness.setLocalStateField('s', serialize(state));
 		await sleep(1000 / SNAPSHOT_HZ);
 	}
-	const guestRender = deserialize(lastSnap, Date.now());
+	const visitorView = deserialize(lastSnap, Date.now());
 	check(
-		'the guest view tracks the host match',
-		guestRender.left.score === state.left.score && guestRender.right.score === state.right.score,
-		`host ${state.left.score}-${state.right.score} / guest ${guestRender.left.score}-${guestRender.right.score}, seq ${lastSnap.n}`,
+		'the visitor renders the authority match',
+		visitorView.left.score === state.left.score && visitorView.right.score === state.right.score,
+		`authority ${state.left.score}-${state.right.score} / visitor ${visitorView.left.score}-${visitorView.right.score}, seq ${lastSnap.n}`,
 	);
-	check('the snapshot stream keeps flowing', seenSeq > 10, `${seenSeq} snapshots applied`);
-	console.log(`  · host publish → guest apply lag sample: ${receivedAt - publishedAt}ms`);
+	check('the snapshot stream keeps flowing', seenSeq > 10, `${seenSeq} snapshots`);
 
 	// --- rematch request -------------------------------------------------------
-	guest.provider.awareness.setLocalStateField('q', 1);
-	const reqSeen = await waitFor(() => {
-		const guestState = host.provider.awareness.getStates().get(hostView.guestId);
-		return Number(guestState?.q) === 1 ? 1 : null;
-	}, { label: 'rematch request' });
-	check('guest rematch requests reach the host', reqSeen === 1);
+	b.awareness.setLocalStateField('q', 1);
+	const asked = await waitFor(() => Number(a.awareness.getStates().get(bothSeated.av.otherId)?.q) === 1, { label: 'the rematch request' });
+	check('the visitor can ask for a rematch', asked === true);
 
-	// --- safety rails ----------------------------------------------------------
-	check('a guest never accepts snapshots from a non-host', acceptSnapshot({ r: 'guest', s: { n: 9999 } }, 'guest', 0) === false);
-	check('stale snapshots are ignored', acceptSnapshot({ r: 'host', s: { n: 5 } }, 'guest', 6) === false);
-	check('room codes are validated before joining', normalizeCode('zz') === null && normalizeCode('abcd') === 'ABCD');
+	// --- the authority leaves: the visitor keeps its paddle and gets the bull --
+	a.awareness.setLocalState(null);
+	a.provider.destroy();
+	const orphaned = await waitFor(() => {
+		const v = view(b);
+		return v.hasAuthority === false ? v : null;
+	}, { label: 'the authority to disappear' });
+	check('the visitor sees its opponent vanish', orphaned.hasAuthority === false && orphaned.selfSide === 'left');
+	check('the bull comes back for the empty horn', orphaned.botSide === 'right', `bot on ${orphaned.botSide}`);
 
-	// --- teardown --------------------------------------------------------------
-	guest.provider.destroy();
-	await waitFor(() => (host.provider.awareness.getStates().size <= 1 ? true : null), {
-		label: 'the guest to leave the room',
-	});
-	check('leaving the room removes the guest from the host view', true);
-	host.provider.destroy();
+	b.awareness.setLocalStateField('r', 'host'); // promotion, as the page does
+	const promoted = await waitFor(() => {
+		const v = view(b);
+		return v.selfIsAuthority ? v : null;
+	}, { label: 'the visitor to be promoted' });
+	check('the visitor takes over as the authority, keeping its paddle', promoted.selfIsAuthority && promoted.selfSide === 'left' && promoted.botSide === 'right');
+	check(
+		'it can be joined in turn',
+		classifySlot(b.awareness.getStates()).kind === 'join',
+		JSON.stringify(classifySlot(b.awareness.getStates()).kind),
+	);
+	check('pen label reads back for the status line', penLabel(PEN) === '#1' && otherSide('left') === 'right');
 
-	console.log(`\n${passed} live netplay checks passed against ${RELAY_URL} (room ${roomName(ROOM)}).`);
+	b.provider.destroy();
+	console.log(`\n${passed} live ambient-netplay checks passed against ${RELAY_URL} (${ROOM}).`);
 } catch (err) {
-	console.error(`\n✖ live netplay test failed: ${err.message}`);
+	console.error(`\n✖ live ambient-netplay test failed: ${err.message}`);
 	exitCode = 1;
 } finally {
-	try {
-		host.provider.destroy();
-		guest.provider.destroy();
-	} catch {
-		/* already gone */
+	for (const c of [a, b]) {
+		try {
+			c.awareness.setLocalState(null);
+			c.provider.destroy();
+		} catch {
+			/* already gone */
+		}
 	}
-	// don't let y-websocket's reconnect timers hold the process open
 	setTimeout(() => process.exit(exitCode), 250).unref();
 }

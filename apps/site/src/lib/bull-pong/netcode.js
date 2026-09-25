@@ -1,93 +1,134 @@
-// Bull Pong — multiplayer protocol helpers (pure functions, no DOM, no Yjs).
+// Bull Pong — ambient netplay protocol (pure functions, no DOM, no Yjs).
 //
-// Transport: a y-websocket relay room. Each player publishes one tiny
-// awareness state; the relay forwards it to everyone else in the room.
-//   host  -> { r: 'host',  s: <snapshot>, c: <seq> }
-//   guest -> { r: 'guest', i: { y }, q: <reset request counter> }
-// The first client (lowest client id) for each role wins, so a stray third
-// connection can never hijack a match — it just spectates.
+// There are no room codes. A fixed pool of pens (relay rooms) is always open.
+// A client that finds an empty pen settles in as its authority and plays the
+// bull (AI) on the free side; a client that finds a pen with a single human
+// drops in and takes the bull's paddle — the bot is replaced mid-rally, no
+// reset, no handshake, no negotiation. Everybody landed on a game already.
+//
+// Awareness state each client publishes:
+//   { r: 'host' | 'guest', side: 'left' | 'right', s: <snapshot>, i: {y}, q: <n> }
+//     r='host'  — this client is the authority (it simulates and publishes)
+//     side      — which paddle this client drives
+//     s         — authority only: the match snapshot
+//     i         — player only: paddle centre it wants
+//     q         — player only: rematch request counter
+//
+// The authority drives whatever side has no human on it, so when a visitor
+// arrives the bot simply stops playing and the ball keeps rolling.
 
 export const RELAY_URL = 'wss://demos.yjs.dev/ws';
-export const ROOM_PREFIX = 'bullpong-';
-export const CODE_LENGTH = 4;
-export const MAX_GUESTS = 1;
+export const PEN_PREFIX = 'bullpong-pen';
+export const PEN_SLOTS = 8;
+export const SIDES = ['left', 'right'];
 
-const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-const CODE_RE = /^[A-Z0-9]{4,10}$/;
-
-/** Room codes: unambiguous alphabet, crypto RNG when available. */
-export function makeCode(length = CODE_LENGTH) {
-	const out = [];
-	const cryptoObj = globalThis.crypto;
-	if (cryptoObj?.getRandomValues) {
-		const bytes = new Uint8Array(length);
-		cryptoObj.getRandomValues(bytes);
-		for (const b of bytes) out.push(ALPHABET[b % ALPHABET.length]);
-	} else {
-		for (let i = 0; i < length; i++) out.push(ALPHABET[(Math.random() * ALPHABET.length) | 0]);
-	}
-	return out.join('');
+/** Relay room name for pen `index` (0-based) under a prefix. */
+export function penRoom(prefix, index) {
+	return `${prefix}-${index + 1}`;
 }
 
-/** Accepts 'abcd', 'a1-b2', ' bullpong-abcd ' → 'ABCD' (or null). */
-export function normalizeCode(raw) {
-	if (typeof raw !== 'string') return null;
-	let value = raw.trim().toUpperCase();
-	if (value.startsWith(ROOM_PREFIX.toUpperCase())) value = value.slice(ROOM_PREFIX.length);
-	value = value.replace(/[^A-Z0-9]/g, '');
-	return CODE_RE.test(value) ? value : null;
+/** `?pen=<token>` lets a private/test pen exist without codes in the UI. */
+export function normalizePenPrefix(raw) {
+	if (typeof raw !== 'string') return PEN_PREFIX;
+	const token = raw.trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
+	if (token.length < 3) return PEN_PREFIX;
+	return `bullpong-${token}`.slice(0, 40);
 }
 
-/** The relay room name for a player-facing code. */
-export function roomName(code) {
-	return `${ROOM_PREFIX}${code.toUpperCase()}`;
-}
-
-/** Pull a room code out of a share link (or any URL-ish string). */
-export function codeFromUrl(href) {
+export function penPrefixFromUrl(href) {
 	try {
 		const url = new URL(href, 'https://eltoro.carter.works');
-		return normalizeCode(url.searchParams.get('room') ?? '');
+		return normalizePenPrefix(url.searchParams.get('pen') ?? '');
 	} catch {
-		return null;
+		return PEN_PREFIX;
 	}
 }
 
-export function shareLink(origin, code) {
-	return `${origin}/artifacts/bull-pong/?room=${code.toUpperCase()}`;
+export function penLabel(index) {
+	return `#${index + 1}`;
+}
+
+export function otherSide(side) {
+	return side === 'left' ? 'right' : 'left';
+}
+
+/** Every seated human in the pen, oldest client first, sides de-duplicated. */
+export function readClients(states) {
+	const clients = [];
+	for (const [id, state] of states ?? []) {
+		if (!state || typeof state !== 'object') continue;
+		if (state.r !== 'host' && state.r !== 'guest') continue;
+		clients.push({ id, authority: state.r === 'host', side: state.side === 'left' ? 'left' : 'right', state });
+	}
+	clients.sort((a, b) => a.id - b.id);
+	const used = new Set();
+	for (const client of clients) {
+		if (used.has(client.side)) client.side = otherSide(client.side);
+		if (used.has(client.side)) client.side = null; // both paddles taken
+		if (client.side) used.add(client.side);
+	}
+	return clients;
 }
 
 /**
- * Work out who is who from the awareness states.
- * @param {Map<number, object>} states awareness.getStates()
- * @param {number} selfId   awareness.clientID (excluded from 'others')
+ * What would happen if we joined this pen?
+ *   'empty'          — settle in as authority, bot on the free side
+ *   'join'           — a lone authority is playing the bot: take the bot's paddle
+ *   'takeover'       — a lone player's authority left: become the authority
+ *   'full'           — two humans already in the pen
  */
-export function resolveRoom(states, selfId) {
-	const hosts = [];
-	const guests = [];
-	for (const [id, state] of states ?? []) {
-		if (!state || typeof state !== 'object') continue;
-		if (state.r === 'host') hosts.push(id);
-		else if (state.r === 'guest') guests.push(id);
+export function classifySlot(states) {
+	const clients = readClients(states).filter((c) => c.side);
+	if (clients.length === 0) return { kind: 'empty', clients, freeSide: 'right', incumbent: null };
+	if (clients.length === 1) {
+		const incumbent = clients[0];
+		return {
+			kind: incumbent.authority ? 'join' : 'takeover',
+			clients,
+			freeSide: otherSide(incumbent.side),
+			incumbent,
+		};
 	}
-	hosts.sort((a, b) => a - b);
-	guests.sort((a, b) => a - b);
-	const hostId = hosts[0] ?? null;
-	const guestIds = guests.slice(0, MAX_GUESTS);
-	const extraGuests = guests.slice(MAX_GUESTS);
+	return { kind: 'full', clients, freeSide: null, incumbent: null };
+}
+
+/** Choose a pen from a scan: prefer replacing a bot, then adopting, then new. */
+export function pickSlot(results) {
+	for (const kind of ['join', 'takeover', 'empty']) {
+		const hit = (results ?? []).find((r) => r?.classify?.kind === kind);
+		if (hit) return { index: hit.index, action: kind, classify: hit.classify };
+	}
+	return null;
+}
+
+/** The local client's view of the pen it is in. */
+export function resolvePen(states, selfId) {
+	const clients = readClients(states);
+	const seated = clients.filter((c) => c.side);
+	const authority = seated.find((c) => c.authority) ?? null;
+	const me = seated.find((c) => c.id === selfId) ?? null;
+	const others = seated.filter((c) => c.id !== selfId);
+	const taken = new Set(seated.map((c) => c.side));
+	const botSide = taken.has('left') && taken.has('right') ? null : taken.has('left') ? 'right' : 'left';
 	return {
-		hostId,
-		guestId: guestIds[0] ?? null,
-		extraGuests,
-		selfIsHost: hostId === selfId,
-		selfIsGuest: guestIds[0] === selfId,
-		selfIsSpectator: hostId !== selfId && guestIds[0] !== selfId,
-		players: (hostId != null ? 1 : 0) + (guestIds.length ? 1 : 0),
-		waiting: hostId == null || guestIds.length === 0,
+		clients,
+		seated: !!me,
+		selfSide: me?.side ?? null,
+		selfIsAuthority: authority != null && authority.id === selfId,
+		hasAuthority: authority != null,
+		authorityId: authority?.id ?? null,
+		otherId: others[0]?.id ?? null,
+		otherSide: others[0]?.side ?? null,
+		botSide,
+		crowded: clients.length > 2,
+		waiting: seated.length < 2,
 	};
 }
 
-/** Should this client accept the snapshot coming from `fromState`? */
+/**
+ * Should this client accept the snapshot the authority is publishing?
+ * Only fresh, well-formed snapshots from the current authority count.
+ */
 export function acceptSnapshot(fromState, role, seenSeq) {
 	if (role !== 'guest') return false;
 	if (fromState?.r !== 'host') return false;
@@ -95,17 +136,20 @@ export function acceptSnapshot(fromState, role, seenSeq) {
 	return (fromState.s.n ?? -1) > (seenSeq ?? -1);
 }
 
-/** Human-readable status line for the current room picture. */
-export function describeRoom({ mode, room, picture, relayUp, link }) {
-	if (mode === 'ai') return 'solo mode — play the bull, or host a game to play a friend';
-	if (!room) return 'solo mode';
-	if (relayUp === false) return `relay unreachable — retrying for room ${room}…`;
-	if (relayUp == null) return `room ${room} — knocking on the relay…`;
-	if (picture?.selfIsSpectator) return `room ${room} — two bulls already in the pen, you are spectating`;
-	if (mode === 'host') {
-		if (picture?.waiting) return `room ${room} — waiting for an opponent…${link ? `  share ${link}` : ''}`;
-		return `opponent in the pen — room ${room}. mind the bull.`;
+/** Status line: what is happening right now, in one breath. */
+export function describePen({ networked, scanning, penIndex, picture, localSide, authority }) {
+	const room = penIndex == null ? '' : ` in pen ${penLabel(penIndex)}`;
+	if (!networked) {
+		return scanning
+			? 'playing the bull — sniffing around for another pen…'
+			: 'playing the bull — the pen is quiet, someone else may drop in';
 	}
-	if (picture?.waiting) return `room ${room} — connected, waiting for the host's first serve…`;
-	return `both bulls in the pen — room ${room}. mind the bull.`;
+	if (picture && !picture.seated) return `pen ${penLabel(penIndex)} is full — playing the bull until a horn frees up`;
+	if (picture?.crowded) return `pen ${penLabel(penIndex)} is crowded — playing the bull until a horn frees up`;
+	if (authority) {
+		if (picture?.waiting) return `you${room} — the bull has the ${otherSide(localSide)} horn, anyone can take it`;
+		return `you${room} — someone just took the bull's horn. mind the bull.`;
+	}
+	if (!picture?.hasAuthority) return `you${room} — waiting for the pen to answer…`;
+	return `you dropped into pen ${penLabel(penIndex)} — the ${localSide} horn is yours`;
 }

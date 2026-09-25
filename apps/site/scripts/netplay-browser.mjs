@@ -1,17 +1,22 @@
 #!/usr/bin/env node
-// Real-browser netplay test: two Chromium contexts play a match through the
-// live relay, driven by the page's own `window.__bullpong` hook.
+// Real-browser ambient-netplay test: three Chromium contexts, no clicks, no codes.
 //
-//   playwright install chromium           # or bring your own browser
-//   node scripts/netplay-browser.mjs
+//   1. the first visitor lands on the page and is already playing the bull
+//   2. the second visitor is dropped into that match, taking the bull's paddle
+//   3. the third visitor gets a pen of its own instead of stealing a paddle
+//   4. when the second visitor leaves, the bull takes its horn back
 //
-// Env: BASE (default the local preview below), PLAYWRIGHT_BROWSERS_PATH.
-// Needs a built site served locally:  python3 -m http.server 8899 --directory dist
-// On NixOS, `nix build nixpkgs#playwright-driver.browsers` plus a matching
-// `npm i playwright@<same version>` gives a browser the sandbox can run.
+//   python3 -m http.server 8899 --directory dist
+//   node scripts/netplay-browser.mjs     # needs `playwright` + a browser
+//
+// Env: BASE (default below), PLAYWRIGHT_BROWSERS_PATH. Each client uses a
+// private pen namespace (`?pen=`), so the test never disturbs live players.
+
 import { chromium } from 'playwright';
 
 const BASE = process.env.BASE ?? 'http://127.0.0.1:8899/artifacts/bull-pong/';
+const PREFIX = `smoke${Math.floor(Math.random() * 9000 + 1000)}`.toLowerCase();
+const PEN_URL = `${BASE}?pen=${PREFIX}`;
 let passed = 0;
 const errors = [];
 
@@ -32,154 +37,90 @@ const browser = await chromium.launch();
 let exitCode = 0;
 
 try {
-	const hostCtx = await browser.newContext();
-	const guestCtx = await browser.newContext();
-	const host = await hostCtx.newPage();
-	const guest = await guestCtx.newPage();
-	for (const [name, page] of [
-		['host', host],
-		['guest', guest],
-	]) {
+	const pages = {};
+	for (const name of ['first', 'second', 'third']) {
+		const ctx = await browser.newContext();
+		const page = await ctx.newPage();
 		page.on('pageerror', (err) => errors.push(`${name}: ${err.message}`));
 		page.on('console', (msg) => {
 			if (msg.type() === 'error') errors.push(`${name} console: ${msg.text()}`);
 		});
+		pages[name] = { ctx, page };
 	}
+	const { first, second, third } = pages;
 
-	await host.goto(BASE, { waitUntil: 'load' });
-	check('page loads with no AI-mode errors yet', (await host.evaluate(() => window.__bullpong.mode)) === 'ai');
+	// --- 1. first visitor: playing the bull before it even settles ------------
+	await first.page.goto(PEN_URL, { waitUntil: 'load' });
+	check('the page starts playing immediately', /playing the bull/.test(await first.page.evaluate(() => window.__bullpong.status)));
+	await first.page.waitForFunction(() => window.__bullpong.networked && window.__bullpong.authority, null, { timeout: 20000 });
+	const firstState = await state(first.page);
+	check('the first visitor settles into a pen on its own', firstState.pen === 1 && firstState.authority === true, `pen ${firstState.pen}`);
+	check('the bull holds the free horn', firstState.botSide === 'left' && firstState.localSide === 'right');
+	check('the status line says the horn is up for grabs', /bull has the left horn/.test(firstState.status), firstState.status);
+	check('no pen code is ever shown to the player', !/[A-Z0-9]{4}/.test(firstState.status.split('pen')[0] ?? ''), firstState.status);
 
-	// --- host creates a room ---------------------------------------------------
-	await host.click('#btn-host');
-	await host.waitForFunction(() => window.__bullpong.mode === 'host' && !!window.__bullpong.room, null, { timeout: 15000 });
-	const code = await host.evaluate(() => window.__bullpong.room);
-	check('host creates a room and shows a code', /^[A-Z0-9]{4}$/.test(code), `code ${code}`);
-	await host.waitForFunction(() => window.__bullpong.relayUp === true, null, { timeout: 20000 });
-	check('host is connected to the relay', true);
+	// --- 2. second visitor: dropped into the live match, taking the bull's paddle
+	await second.page.goto(PEN_URL, { waitUntil: 'load' });
+	await second.page.waitForFunction(() => window.__bullpong.networked && !window.__bullpong.authority, null, { timeout: 25000 });
+	const secondState = await state(second.page);
+	check('the second visitor lands in the same pen', secondState.pen === firstState.pen, `pen ${secondState.pen}`);
+	check('it takes the bull paddle (left horn)', secondState.localSide === 'left');
+	await second.page.waitForFunction(() => /dropped into pen/.test(window.__bullpong.status), null, { timeout: 20000 });
+	check('and the status line says so', true, (await state(second.page)).status);
+
+	await first.page.waitForFunction(() => window.__bullpong.peers === 2, null, { timeout: 20000 });
+	await first.page.waitForFunction(() => window.__bullpong.botSide === null, null, { timeout: 20000 });
+	check('the bull is off the field: two humans now', (await state(first.page)).botSide === null);
+
+	// --- 3. inputs cross the wire, both directions ----------------------------
+	const beforeKeys = (await state(first.page)).snapshot.left.y;
+	for (let i = 0; i < 20; i++) await second.page.keyboard.press('ArrowDown');
+	await sleep(900);
+	const afterKeys = (await state(first.page)).snapshot.left.y;
 	check(
-		'host waits for an opponent with a share link',
-		(await host.evaluate(() => window.__bullpong.status)).includes(`${BASE}?room=${code}`),
+		'the second visitor steers the paddle the bull used to hold',
+		afterKeys > beforeKeys + 60,
+		`authority left.y ${beforeKeys.toFixed(0)} -> ${afterKeys.toFixed(0)}`,
 	);
 
-	// --- guest joins by code ---------------------------------------------------
-	await guest.goto(`${BASE}?room=${code}`, { waitUntil: 'load' });
-	await guest.waitForFunction(() => window.__bullpong.mode === 'guest', null, { timeout: 15000 });
-	await host.waitForFunction(() => window.__bullpong.peers === 2, null, { timeout: 20000 });
-	await guest.waitForFunction(() => window.__bullpong.peers === 2, null, { timeout: 20000 });
-	check('both clients see each other in the room', true);
-	await guest.waitForFunction(() => window.__bullpong.relayUp === true, null, { timeout: 20000 });
-	check('guest is connected to the relay', true);
+	await first.page.locator('#game').scrollIntoViewIfNeeded();
+	const box = await first.page.locator('#game').boundingBox();
+	await first.page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.15);
+	await sleep(900);
+	const remote = (await state(second.page)).snapshot.right;
+	check('the first visitor paddle shows up on the second screen', remote.y < 140, `remote right.y ${remote.y.toFixed(0)}`);
 
-	await host.waitForFunction(() => window.__bullpong.status.includes('in the pen'), null, { timeout: 20000 });
-	await guest.waitForFunction(() => window.__bullpong.status.includes('in the pen'), null, { timeout: 20000 });
-	check('both sides report a live match', true, await host.evaluate(() => window.__bullpong.status));
-
-	await guest.waitForFunction(() => window.__bullpong.seq > 0, null, { timeout: 20000 });
-	check('guest receives host snapshots', true, `seq ${await guest.evaluate(() => window.__bullpong.seq)}`);
-
-	// --- guest paddle -> host (keyboard) ---------------------------------------
-	const hostBefore = (await state(host)).snapshot.left.y;
-	for (let i = 0; i < 20; i++) await guest.keyboard.press('ArrowDown');
-	await sleep(700);
-	const hostAfterKeys = (await state(host)).snapshot.left.y;
+	const scoresA = (await state(first.page)).snapshot;
+	const scoresB = (await state(second.page)).snapshot;
 	check(
-		'guest paddle input (keys) moves the host-side left paddle',
-		hostAfterKeys > hostBefore + 60,
-		`left.y ${hostBefore.toFixed(0)} -> ${hostAfterKeys.toFixed(0)}`,
+		'both players score the same match',
+		scoresA.left.score === scoresB.left.score && scoresA.right.score === scoresB.right.score,
+		`first ${scoresA.left.score}-${scoresA.right.score} / second ${scoresB.left.score}-${scoresB.right.score}`,
 	);
+	await second.page.waitForFunction(() => window.__bullpong.seq > 20, null, { timeout: 20000 });
+	check('the second player is rendering relayed snapshots', true, `seq ${await second.page.evaluate(() => window.__bullpong.seq)}`);
 
-	// --- guest paddle -> host (mouse) -----------------------------------------
-	await guest.locator('#game').scrollIntoViewIfNeeded();
-	const guestBox = await guest.locator('#game').boundingBox();
-	const guestViewY = await guest.evaluate(() => window.innerHeight);
-	const targetY = guestBox.y + Math.min(guestBox.height * 0.85, guestViewY - guestBox.y - 20);
-	await guest.mouse.move(guestBox.x + guestBox.width * 0.5, targetY);
-	await sleep(700);
-	const hostAfterMouse = (await state(host)).snapshot.left.y;
-	check(
-		'guest paddle input (mouse) moves the host-side left paddle',
-		hostAfterMouse > hostAfterKeys + 40,
-		`left.y ${hostAfterKeys.toFixed(0)} -> ${hostAfterMouse.toFixed(0)}`,
-	);
+	// --- 4. a third visitor gets its own pen, not someone's paddle ------------
+	await third.page.goto(PEN_URL, { waitUntil: 'load' });
+	await third.page.waitForFunction(() => window.__bullpong.networked, null, { timeout: 25000 });
+	const thirdState = await state(third.page);
+	check('the third visitor opens another pen', thirdState.pen !== firstState.pen && thirdState.authority === true, `pen ${thirdState.pen}`);
+	check('and keeps playing the bull while it is alone', thirdState.botSide !== null);
+	check('the first pen is untouched by it', (await state(first.page)).peers === 2);
 
-	// --- host paddle -> guest --------------------------------------------------
-	await host.locator('#game').scrollIntoViewIfNeeded();
-	const hostBox = await host.locator('#game').boundingBox();
-	await host.mouse.move(hostBox.x + hostBox.width * 0.5, hostBox.y + hostBox.height * 0.15);
-	await sleep(700);
-	const guestView = (await state(guest)).snapshot;
-	check(
-		'host paddle moves the guest-side view of the right paddle',
-		guestView.right.y < 140,
-		`guest right.y ${guestView.right.y.toFixed(0)}`,
-	);
+	// --- 5. the second visitor leaves: the bull takes its horn back -----------
+	await second.page.close();
+	await second.ctx.close();
+	await first.page.waitForFunction(() => window.__bullpong.botSide !== null, null, { timeout: 15000 });
+	const afterLeave = await state(first.page);
+	check('the bull returns to the abandoned horn', afterLeave.botSide === 'left', `bot on ${afterLeave.botSide}`);
+	check('and the status line goes back to offering it', /bull has the left horn/.test(afterLeave.status), afterLeave.status);
 
-	// --- the two views agree ---------------------------------------------------
-	const hostView = (await state(host)).snapshot;
-	check(
-		'scores agree on both screens',
-		hostView.left.score === guestView.left.score && hostView.right.score === guestView.right.score,
-		`host ${hostView.left.score}-${hostView.right.score} / guest ${guestView.left.score}-${guestView.right.score}`,
-	);
-	// the guest renders from relayed snapshots, so its bull trails the host by the
-	// relay latency — check it sits on the host's recent path (not frozen, not
-	// somewhere else on the field)
-	const trail = [];
-	for (let i = 0; i < 12; i++) {
-		trail.push((await state(host)).snapshot.balls[0]);
-		await sleep(60);
-	}
-	const guestBall = (await state(guest)).snapshot.balls[0];
-	const nearest = Math.min(...trail.map((b) => Math.hypot(b.x - guestBall.x, b.y - guestBall.y)));
-	check(
-		'the bull is on the same path for both players',
-		nearest < 70,
-		`guest (${guestBall.x},${guestBall.y}) is ${nearest.toFixed(0)}px from the host's recent path`,
-	);
-	const guestBall2 = await guest.evaluate(async () => {
-		const a = window.__bullpong.snapshot.balls[0];
-		await new Promise((r) => setTimeout(r, 150));
-		const b = window.__bullpong.snapshot.balls[0];
-		return { moved: Math.hypot(b.x - a.x, b.y - a.y) };
-	});
-	check('the guest view is actually animating', guestBall2.moved > 5, `bull moved ${guestBall2.moved.toFixed(0)}px in 150ms`);
+	check('no page errors in any pen', errors.length === 0, errors.join(' | ') || 'clean console');
 
-	// --- a spectator is not seated --------------------------------------------
-	const specCtx = await browser.newContext();
-	const spectator = await specCtx.newPage();
-	spectator.on('pageerror', (err) => errors.push(`spectator: ${err.message}`));
-	await spectator.goto(`${BASE}?room=${code}`, { waitUntil: 'load' });
-	await spectator.waitForFunction(() => window.__bullpong.mode === 'guest', null, { timeout: 15000 });
-	await spectator.waitForFunction(() => window.__bullpong.status.includes('spectating'), null, { timeout: 20000 });
-	check('a third player is told they are spectating', true, await spectator.evaluate(() => window.__bullpong.status));
-	const hostPaddleBefore = (await state(host)).snapshot.left.y;
-	await spectator.locator('#game').scrollIntoViewIfNeeded();
-	const specBox = await spectator.locator('#game').boundingBox();
-	const specViewY = await spectator.evaluate(() => window.innerHeight);
-	await spectator.mouse.move(
-		specBox.x + specBox.width * 0.5,
-		specBox.y + Math.min(specBox.height * 0.15, specViewY - specBox.y - 20),
-	);
-	await sleep(700);
-	const hostPaddleAfter = (await state(host)).snapshot.left.y;
-	check(
-		'a spectator cannot steer the seated guest paddle',
-		Math.abs(hostPaddleAfter - hostPaddleBefore) < 5,
-		`left.y ${hostPaddleBefore.toFixed(0)} -> ${hostPaddleAfter.toFixed(0)}`,
-	);
-
-	// --- leaving frees the seat ------------------------------------------------
-	await spectator.close();
-	await specCtx.close();
-	await guest.close();
-	await host.waitForFunction(() => window.__bullpong.status.includes('waiting for an opponent'), null, { timeout: 30000 });
-	check('the host goes back to waiting when the guest leaves', true);
-
-	check('no page errors in any client', errors.length === 0, errors.join(' | ') || 'clean console');
-
-	console.log(`\n${passed} browser netplay checks passed against ${BASE} (room ${code}).`);
+	console.log(`\n${passed} browser checks passed for ambient netplay (prefix ${PREFIX}).`);
 } catch (err) {
-	console.error(`\n✖ browser netplay test failed: ${err.message}`);
+	console.error(`\n✖ browser ambient-netplay test failed: ${err.message}`);
 	if (errors.length) console.error(`  page errors: ${errors.join(' | ')}`);
 	exitCode = 1;
 } finally {
