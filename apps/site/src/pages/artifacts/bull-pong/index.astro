@@ -1,3 +1,7 @@
+---
+import ElToroLogo from '../../../components/ElToroLogo.astro';
+---
+
 <!doctype html>
 <html lang="en">
 	<head>
@@ -9,6 +13,7 @@
 	</head>
 	<body>
 		<main>
+			<ElToroLogo size={64} class="pong-logo" />
 			<h1>🐂 bull pong</h1>
 			<p class="hint">
 				mouse / W·S / ↑·↓ to move · first to 7 · the bull is the ball<br />
@@ -49,6 +54,9 @@
 	main {
 		text-align: center;
 		width: min(920px, 96vw);
+	}
+	.pong-logo {
+		margin: 0 auto 1.25rem;
 	}
 	h1 {
 		font-size: 1.6rem;

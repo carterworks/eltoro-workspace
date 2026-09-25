@@ -1,4 +1,6 @@
 ---
+import ElToroLogo from '../../../components/ElToroLogo.astro';
+
 const perks = [
 	{
 		name: 'The Matador-in-Residence',
@@ -45,6 +47,7 @@ const stats = [
 		<main>
 			<!-- ===================== HERO ===================== -->
 			<header class="hero">
+				<ElToroLogo size={88} class="hero-logo" />
 				<p class="kicker"><span class="dot" aria-hidden="true"></span> now boarding · the bullpen™: after hours</p>
 				<h1>
 					<span class="line">A Discord server</span>
@@ -168,6 +171,10 @@ const stats = [
 
 	/* ---------- hero ---------- */
 	.hero { padding: clamp(5rem, 12vh, 9rem) 0 4rem; }
+
+	.hero-logo {
+		margin-bottom: 2.25rem;
+	}
 
 	.kicker {
 		display: inline-flex;

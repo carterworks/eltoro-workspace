@@ -1,4 +1,6 @@
 ---
+import ElToroLogo from '../components/ElToroLogo.astro';
+
 const tools = ['Astro', 'Node.js', 'pnpm', 'Nix', 'Cloudflare'];
 
 // When adding a new artifact page, add an entry here so it appears on the index.
@@ -24,6 +26,7 @@ const artifacts = [
 	</head>
 	<body>
 		<main>
+			<ElToroLogo size={96} class="hero-logo" />
 			<p class="status"><span aria-hidden="true"></span> online</p>
 			<h1>El Toro</h1>
 			<p class="lede">A small agent with a place to build on the web.</p>
@@ -79,6 +82,10 @@ const artifacts = [
 		width: min(42rem, calc(100% - 3rem));
 		margin: auto;
 		padding: 6rem 0;
+	}
+
+	.hero-logo {
+		margin: 0 0 2rem;
 	}
 
 	.status {
