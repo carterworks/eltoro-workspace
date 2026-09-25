@@ -11,7 +11,8 @@
 		<main>
 			<h1>🐂 bull pong</h1>
 			<p class="hint">
-				mouse / W·S / ↑·↓ to move · first to 7 · the bull is the ball
+				mouse / W·S / ↑·↓ to move · first to 7 · the bull is the ball<br />
+				powerups drop mid-field — the bull collects them for whoever touched it last
 			</p>
 			<canvas id="game" width="900" height="560"></canvas>
 			<p class="foot">
@@ -58,6 +59,7 @@
 	.hint {
 		color: var(--dim);
 		font-size: 0.85rem;
+		line-height: 1.5;
 		margin-bottom: 1rem;
 	}
 	canvas {
@@ -87,37 +89,81 @@
 	const H = canvas.height;
 
 	const PADDLE_W = 14;
-	const PADDLE_H = 92;
+	const BASE_PADDLE_H = 92;
+	const WIDE_PADDLE_H = BASE_PADDLE_H * 1.6;
 	const PADDLE_SPEED = 6.2;
 	const BALL_R = 20;
 	const WIN_SCORE = 7;
 
-	const left = { x: 26, y: H / 2 - PADDLE_H / 2, score: 0, up: false, down: false, ai: false };
-	const right = { x: W - 26 - PADDLE_W, y: H / 2 - PADDLE_H / 2, score: 0, up: false, down: false, ai: true };
+	const left = { x: 26, y: H / 2 - BASE_PADDLE_H / 2, h: BASE_PADDLE_H, score: 0, up: false, down: false };
+	const right = { x: W - 26 - PADDLE_W, y: H / 2 - BASE_PADDLE_H / 2, h: BASE_PADDLE_H, score: 0, up: false, down: false, ai: true };
 
-	const ball = { x: W / 2, y: H / 2, vx: 0, vy: 0, speed: 7.4, spin: 0 };
-
-	// you play the right paddle; bull AI plays left. flip with a key if you want.
-	let mouseY = null;
+	let balls = [];
+	let powerups = [];
+	let toasts = [];
+	let lastTouch = null; // 'left' | 'right' — who the bull last bounced off
 	let winner = null;
+	let mouseY = null;
+	let nextSpawnAt = 0;
 
-	function serve(dir) {
-		ball.x = W / 2;
-		ball.y = H / 2;
-		const angle = (Math.random() * 0.6 - 0.3); // -0.3..0.3 rad
-		ball.vx = Math.cos(angle) * ball.speed * dir;
-		ball.vy = Math.sin(angle) * ball.speed;
+	// global ball effects
+	const fx = { slowUntil: 0, rageUntil: 0 };
+	// per-side effects
+	const side = {
+		left: { wideUntil: 0, fence: false },
+		right: { wideUntil: 0, fence: false },
+	};
+
+	const TYPES = {
+		horns: { glyph: '♉', color: '#d4a24e', label: 'HORNS' },
+		tranq: { glyph: '❄', color: '#7cc4e8', label: 'TRANQ' },
+		rage: { glyph: '🔥', color: '#c1483b', label: 'RAGE' },
+		herd: { glyph: '🐄', color: '#b08850', label: 'HERD' },
+		fence: { glyph: '🚧', color: '#e8c547', label: 'FENCE' },
+	};
+
+	function makeBall(dir, extra = false, deadline = 0) {
+		const angle = Math.random() * 0.6 - 0.3; // -0.3..0.3 rad
+		const speed = 7.4;
+		return {
+			x: W / 2,
+			y: H / 2,
+			vx: Math.cos(angle) * speed * dir,
+			vy: Math.sin(angle) * speed,
+			speed,
+			spin: 0,
+			rot: 0,
+			extra,
+			deadline,
+		};
 	}
 
 	function resetMatch() {
 		left.score = 0;
 		right.score = 0;
+		left.h = BASE_PADDLE_H;
+		right.h = BASE_PADDLE_H;
 		winner = null;
-		serve(Math.random() < 0.5 ? 1 : -1);
+		balls = [makeBall(Math.random() < 0.5 ? 1 : -1)];
+		powerups = [];
+		toasts = [];
+		lastTouch = null;
+		fx.slowUntil = 0;
+		fx.rageUntil = 0;
+		side.left.wideUntil = 0;
+		side.left.fence = false;
+		side.right.wideUntil = 0;
+		side.right.fence = false;
+		nextSpawnAt = performance.now() + 5000;
+	}
+
+	function toast(text, color = '#e8e2d6') {
+		toasts.push({ text, color, t0: performance.now() });
+		if (toasts.length > 4) toasts.shift();
 	}
 
 	function clampPaddle(p) {
-		p.y = Math.max(8, Math.min(H - PADDLE_H - 8, p.y));
+		p.y = Math.max(8, Math.min(H - p.h - 8, p.y));
 	}
 
 	function movePaddle(p) {
@@ -127,74 +173,174 @@
 	}
 
 	function aiMove(p) {
-		// left paddle: chase the ball with a little laziness
-		const target = ball.y - PADDLE_H / 2 + Math.sin(performance.now() / 500) * 14;
+		// chase the nearest incoming ball with a little laziness
+		const incoming = balls.filter((b) => (p === left ? b.vx < 0 : b.vx > 0));
+		const target0 = incoming.length
+			? incoming.reduce((a, b) => (Math.abs(b.x - p.x) < Math.abs(a.x - p.x) ? b : a))
+			: balls[0];
+		if (!target0) return;
+		const target = target0.y - p.h / 2 + Math.sin(performance.now() / 500) * 14;
 		const delta = target - p.y;
 		const step = Math.sign(delta) * Math.min(Math.abs(delta), PADDLE_SPEED * 0.82);
 		p.y += step;
 		clampPaddle(p);
 	}
 
-	function hitPaddle(p, dir) {
-		const rel = (ball.y - (p.y + PADDLE_H / 2)) / (PADDLE_H / 2); // -1..1
+	function hitPaddle(b, p, dir) {
+		const rel = (b.y - (p.y + p.h / 2)) / (p.h / 2); // -1..1
 		const angle = rel * 0.9; // max ~51°
-		const speed = Math.min(ball.speed * 1.05, 14); // ramp
-		ball.speed = speed;
-		ball.vx = Math.cos(angle) * speed * dir;
-		ball.vy = Math.sin(angle) * speed;
-		ball.spin = rel * 0.25;
+		b.speed = Math.min(b.speed * 1.05, 14); // ramp
+		b.vx = Math.cos(angle) * b.speed * dir;
+		b.vy = Math.sin(angle) * b.speed;
+		b.spin = rel * 0.25;
+		lastTouch = dir === 1 ? 'left' : 'right';
+	}
+
+	function trySpawn(now) {
+		const keys = Object.keys(TYPES);
+		for (let i = 0; i < 5; i++) {
+			const x = W * 0.32 + Math.random() * W * 0.36;
+			const y = 70 + Math.random() * (H - 140);
+			if (balls.every((b) => Math.hypot(b.x - x, b.y - y) > 110)) {
+				const type = keys[(Math.random() * keys.length) | 0];
+				powerups.push({ x, y, r: 16, type, ...TYPES[type] });
+				nextSpawnAt = now + 8000 + Math.random() * 5000;
+				return;
+			}
+		}
+		nextSpawnAt = now + 1500; // crowded — retry soon
+	}
+
+	function collect(pu) {
+		const now = performance.now();
+		const who = lastTouch ?? (Math.random() < 0.5 ? 'left' : 'right');
+		const name = who === 'right' ? 'YOU' : 'BULL';
+		const s = side[who];
+		if (pu.type === 'horns') {
+			s.wideUntil = now + 8000;
+			toast(`♉ LONG HORNS → ${name}`, pu.color);
+		} else if (pu.type === 'tranq') {
+			fx.slowUntil = now + 5000;
+			fx.rageUntil = 0;
+			toast('❄ TRANQ DART — the bull slows down', pu.color);
+		} else if (pu.type === 'rage') {
+			fx.rageUntil = now + 5000;
+			fx.slowUntil = 0;
+			toast('🔥 RAGE — the bull is furious', pu.color);
+		} else if (pu.type === 'herd') {
+			if (!balls.some((b) => b.extra)) {
+				const dir = who === 'right' ? -1 : 1; // send it at the opponent
+				balls.push(makeBall(dir, true, now + 14000));
+				toast(`🐄 HERD — extra bull for ${name}`, pu.color);
+			}
+		} else if (pu.type === 'fence') {
+			s.fence = true;
+			toast(`🚧 FENCE → ${name}`, pu.color);
+		}
+	}
+
+	function score(conceder, b) {
+		const scorer = conceder === 'left' ? right : left;
+		scorer.score++;
+		const idx = balls.indexOf(b);
+		if (idx >= 0) balls.splice(idx, 1);
+		if (scorer.score >= WIN_SCORE) {
+			winner = scorer === right ? 'you' : 'the bull';
+			powerups = [];
+			return;
+		}
+		if (!b.extra) balls.unshift(makeBall(conceder === 'left' ? 1 : -1));
 	}
 
 	function update() {
+		const now = performance.now();
 		if (winner) return;
 
+		// wide paddles decay
+		left.h = now < side.left.wideUntil ? WIDE_PADDLE_H : BASE_PADDLE_H;
+		right.h = now < side.right.wideUntil ? WIDE_PADDLE_H : BASE_PADDLE_H;
+
+		// human (right) + bull AI (left)
 		movePaddle(right);
-		movePaddle(left);
-		if (right.ai) aiMove(left);
-		else aiMove(right);
-
-		// human paddle
-		const human = right.ai ? right : left;
+		aiMove(left);
 		if (mouseY != null) {
-			human.y = mouseY - PADDLE_H / 2;
-			clampPaddle(human);
+			right.y = mouseY - right.h / 2;
+			clampPaddle(right);
 		}
 
-		ball.x += ball.vx;
-		ball.y += ball.vy;
+		// spawn powerups
+		if (now > nextSpawnAt && powerups.length < 2) trySpawn(now);
 
-		// walls
-		if (ball.y - BALL_R < 0) {
-			ball.y = BALL_R;
-			ball.vy = Math.abs(ball.vy);
-		}
-		if (ball.y + BALL_R > H) {
-			ball.y = H - BALL_R;
-			ball.vy = -Math.abs(ball.vy);
-		}
+		const speedMul = now < fx.rageUntil ? 1.35 : now < fx.slowUntil ? 0.55 : 1;
 
-		// paddles
-		for (const [p, dir] of [[left, 1], [right, -1]]) {
-			const inX =
-				(dir === 1 && ball.x - BALL_R < p.x + PADDLE_W && ball.x > p.x) ||
-				(dir === -1 && ball.x + BALL_R > p.x && ball.x < p.x + PADDLE_W);
-			const inY = ball.y + BALL_R > p.y && ball.y - BALL_R < p.y + PADDLE_H;
-			if (inX && inY && Math.sign(ball.vx) !== dir) {
-				ball.x = dir === 1 ? p.x + PADDLE_W + BALL_R : p.x - BALL_R;
-				hitPaddle(p, dir);
+		for (const b of [...balls]) {
+			// ease current speed toward target (ramp × powerup multiplier)
+			const mag = Math.hypot(b.vx, b.vy) || 1;
+			const cur = mag + (b.speed * speedMul - mag) * 0.12;
+			b.vx = (b.vx / mag) * cur;
+			b.vy = (b.vy / mag) * cur;
+
+			b.x += b.vx;
+			b.y += b.vy;
+
+			// walls
+			if (b.y - BALL_R < 0) {
+				b.y = BALL_R;
+				b.vy = Math.abs(b.vy);
+			}
+			if (b.y + BALL_R > H) {
+				b.y = H - BALL_R;
+				b.vy = -Math.abs(b.vy);
+			}
+
+			// paddles
+			for (const [p, dir] of [[left, 1], [right, -1]]) {
+				const inX =
+					(dir === 1 && b.x - BALL_R < p.x + PADDLE_W && b.x > p.x) ||
+					(dir === -1 && b.x + BALL_R > p.x && b.x < p.x + PADDLE_W);
+				const inY = b.y + BALL_R > p.y && b.y - BALL_R < p.y + p.h;
+				if (inX && inY && Math.sign(b.vx) !== dir) {
+					b.x = dir === 1 ? p.x + PADDLE_W + BALL_R : p.x - BALL_R;
+					hitPaddle(b, p, dir);
+				}
+			}
+
+			// powerup pickup
+			for (const pu of [...powerups]) {
+				if (Math.hypot(b.x - pu.x, b.y - pu.y) < BALL_R + pu.r) {
+					powerups.splice(powerups.indexOf(pu), 1);
+					collect(pu);
+				}
+			}
+
+			// goals (fences save once at the edge)
+			if (b.vx < 0) {
+				if (b.x - BALL_R < 2 && side.left.fence) {
+					side.left.fence = false;
+					b.x = BALL_R + 2;
+					b.vx = Math.abs(b.vx);
+					b.vy *= 0.5;
+					toast('🚧 FENCE SAVE', '#e8c547');
+				} else if (b.x < -40) {
+					score('left', b);
+					continue;
+				}
+			} else if (b.vx > 0) {
+				if (b.x + BALL_R > W - 2 && side.right.fence) {
+					side.right.fence = false;
+					b.x = W - BALL_R - 2;
+					b.vx = -Math.abs(b.vx);
+					b.vy *= 0.5;
+					toast('🚧 FENCE SAVE', '#e8c547');
+				} else if (b.x > W + 40) {
+					score('right', b);
+					continue;
+				}
 			}
 		}
 
-		// score
-		if (ball.x < -40) {
-			right.score++;
-			if (right.score >= WIN_SCORE) winner = right.ai ? 'you' : 'left';
-			else serve(1);
-		} else if (ball.x > W + 40) {
-			left.score++;
-			if (left.score >= WIN_SCORE) winner = right.ai ? 'the bull' : 'left';
-			else serve(-1);
-		}
+		// herd bulls expire
+		balls = balls.filter((b) => !b.extra || now < b.deadline);
 	}
 
 	function drawBull(x, y, r, rot) {
@@ -235,7 +381,53 @@
 		ctx.restore();
 	}
 
+	function drawHUD(now) {
+		ctx.font = '600 11px ui-monospace, SFMono-Regular, Menlo, monospace';
+		ctx.textBaseline = 'top';
+
+		// per-side effects
+		for (const [key, x, align] of [['left', 24, 'left'], ['right', W - 24, 'right']]) {
+			const s = side[key];
+			const parts = [];
+			if (now < s.wideUntil) parts.push(`♉ ${((s.wideUntil - now) / 1000).toFixed(0)}s`);
+			if (s.fence) parts.push('🚧');
+			if (parts.length) {
+				ctx.textAlign = align;
+				ctx.fillStyle = '#d4a24e';
+				ctx.fillText(parts.join('  '), x, 18);
+			}
+		}
+
+		// global bull mood, under the scores
+		const mood = [];
+		if (now < fx.slowUntil) mood.push(`❄ ${((fx.slowUntil - now) / 1000).toFixed(0)}s`);
+		if (now < fx.rageUntil) mood.push(`🔥 ${((fx.rageUntil - now) / 1000).toFixed(0)}s`);
+		if (mood.length) {
+			ctx.textAlign = 'center';
+			ctx.fillStyle = '#6b665c';
+			ctx.fillText(mood.join('  '), W / 2, 74);
+		}
+		ctx.textBaseline = 'alphabetic';
+	}
+
+	function drawToasts(now) {
+		ctx.textAlign = 'center';
+		ctx.font = '600 13px ui-monospace, SFMono-Regular, Menlo, monospace';
+		let i = 0;
+		for (const t of toasts) {
+			const age = (now - t.t0) / 1400;
+			if (age >= 1) continue;
+			ctx.globalAlpha = 1 - age;
+			ctx.fillStyle = t.color;
+			ctx.fillText(t.text, W / 2, H * 0.3 + i * 20 - age * 12);
+			i++;
+		}
+		ctx.globalAlpha = 1;
+		toasts = toasts.filter((t) => now - t.t0 < 1400);
+	}
+
 	function draw() {
+		const now = performance.now();
 		ctx.clearRect(0, 0, W, H);
 
 		// center line
@@ -248,15 +440,66 @@
 		ctx.stroke();
 		ctx.setLineDash([]);
 
-		// paddles
-		ctx.fillStyle = '#c1483b';
-		ctx.fillRect(left.x, left.y, PADDLE_W, PADDLE_H);
-		ctx.fillStyle = '#e8e2d6';
-		ctx.fillRect(right.x, right.y, PADDLE_W, PADDLE_H);
+		// fences
+		for (const [key, x] of [['left', 10], ['right', W - 10]]) {
+			if (side[key].fence) {
+				ctx.strokeStyle = '#e8c547';
+				ctx.globalAlpha = 0.65 + Math.sin(now / 200) * 0.2;
+				ctx.setLineDash([6, 8]);
+				ctx.lineWidth = 3;
+				ctx.beginPath();
+				ctx.moveTo(x, 8);
+				ctx.lineTo(x, H - 8);
+				ctx.stroke();
+				ctx.setLineDash([]);
+				ctx.globalAlpha = 1;
+			}
+		}
 
-		// bull ball (spins with spin, plus a slow base rotation for life)
-		ball.rot = (ball.rot || 0) + 0.03 + ball.spin;
-		drawBull(ball.x, ball.y, BALL_R, ball.rot);
+		// paddles (wide ones glow gold)
+		ctx.fillStyle = '#c1483b';
+		if (left.h > BASE_PADDLE_H) {
+			ctx.shadowColor = '#d4a24e';
+			ctx.shadowBlur = 14;
+		}
+		ctx.fillRect(left.x, left.y, PADDLE_W, left.h);
+		ctx.shadowBlur = 0;
+		ctx.fillStyle = '#e8e2d6';
+		if (right.h > BASE_PADDLE_H) {
+			ctx.shadowColor = '#d4a24e';
+			ctx.shadowBlur = 14;
+		}
+		ctx.fillRect(right.x, right.y, PADDLE_W, right.h);
+		ctx.shadowBlur = 0;
+
+		// powerups
+		for (const p of powerups) {
+			const pulse = 1 + Math.sin(now / 280 + p.x) * 0.08;
+			ctx.save();
+			ctx.globalAlpha = 0.9;
+			ctx.fillStyle = '#151310';
+			ctx.strokeStyle = p.color;
+			ctx.lineWidth = 2;
+			ctx.beginPath();
+			ctx.arc(p.x, p.y, p.r * pulse, 0, Math.PI * 2);
+			ctx.fill();
+			ctx.stroke();
+			ctx.font = '15px serif';
+			ctx.textAlign = 'center';
+			ctx.textBaseline = 'middle';
+			ctx.fillStyle = p.color;
+			ctx.fillText(p.glyph, p.x, p.y + 1);
+			ctx.font = '600 7px ui-monospace, monospace';
+			ctx.fillStyle = '#776d62';
+			ctx.fillText(p.label, p.x, p.y + p.r + 10);
+			ctx.restore();
+		}
+
+		// bulls
+		for (const b of balls) {
+			b.rot += 0.03 + b.spin;
+			drawBull(b.x, b.y, BALL_R, b.rot);
+		}
 
 		// scores
 		ctx.fillStyle = '#6b665c';
@@ -264,6 +507,9 @@
 		ctx.textAlign = 'center';
 		ctx.fillText(left.score, W / 2 - 60, 56);
 		ctx.fillText(right.score, W / 2 + 60, 56);
+
+		drawHUD(now);
+		drawToasts(now);
 
 		if (winner) {
 			ctx.fillStyle = 'rgb(17 16 14 / 0.82)';
