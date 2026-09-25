@@ -88,15 +88,19 @@
 	const W = canvas.width;
 	const H = canvas.height;
 
+	const bullImg = new Image();
+	bullImg.src = '/artifacts/bull-pong/bull-ball.png';
+
 	const PADDLE_W = 14;
 	const BASE_PADDLE_H = 92;
 	const WIDE_PADDLE_H = BASE_PADDLE_H * 1.6;
 	const PADDLE_SPEED = 6.2;
 	const BALL_R = 20;
 	const WIN_SCORE = 7;
+	const PEN = 22; // playfield inset — keeps the bull inside the pen rails
 
-	const left = { x: 26, y: H / 2 - BASE_PADDLE_H / 2, h: BASE_PADDLE_H, score: 0, up: false, down: false };
-	const right = { x: W - 26 - PADDLE_W, y: H / 2 - BASE_PADDLE_H / 2, h: BASE_PADDLE_H, score: 0, up: false, down: false, ai: true };
+	const left = { x: 34, y: H / 2 - BASE_PADDLE_H / 2, h: BASE_PADDLE_H, score: 0, up: false, down: false };
+	const right = { x: W - 34 - PADDLE_W, y: H / 2 - BASE_PADDLE_H / 2, h: BASE_PADDLE_H, score: 0, up: false, down: false, ai: true };
 
 	let balls = [];
 	let powerups = [];
@@ -163,7 +167,7 @@
 	}
 
 	function clampPaddle(p) {
-		p.y = Math.max(8, Math.min(H - p.h - 8, p.y));
+		p.y = Math.max(PEN, Math.min(H - p.h - PEN, p.y));
 	}
 
 	function movePaddle(p) {
@@ -200,7 +204,7 @@
 		const keys = Object.keys(TYPES);
 		for (let i = 0; i < 5; i++) {
 			const x = W * 0.32 + Math.random() * W * 0.36;
-			const y = 70 + Math.random() * (H - 140);
+			const y = 40 + Math.random() * (H - 80);
 			if (balls.every((b) => Math.hypot(b.x - x, b.y - y) > 110)) {
 				const type = keys[(Math.random() * keys.length) | 0];
 				powerups.push({ x, y, r: 16, type, ...TYPES[type] });
@@ -283,13 +287,13 @@
 			b.x += b.vx;
 			b.y += b.vy;
 
-			// walls
-			if (b.y - BALL_R < 0) {
-				b.y = BALL_R;
+			// walls (inside the pen rails)
+			if (b.y - BALL_R < PEN) {
+				b.y = PEN + BALL_R;
 				b.vy = Math.abs(b.vy);
 			}
-			if (b.y + BALL_R > H) {
-				b.y = H - BALL_R;
+			if (b.y + BALL_R > H - PEN) {
+				b.y = H - PEN - BALL_R;
 				b.vy = -Math.abs(b.vy);
 			}
 
@@ -347,37 +351,16 @@
 		ctx.save();
 		ctx.translate(x, y);
 		ctx.rotate(rot);
-		// head
-		ctx.fillStyle = '#d4a24e';
-		ctx.beginPath();
-		ctx.arc(0, 0, r, 0, Math.PI * 2);
-		ctx.fill();
-		// muzzle
-		ctx.fillStyle = '#a87c34';
-		ctx.beginPath();
-		ctx.ellipse(0, r * 0.35, r * 0.55, r * 0.4, 0, 0, Math.PI * 2);
-		ctx.fill();
-		// horns
-		ctx.strokeStyle = '#e8e2d6';
-		ctx.lineWidth = r * 0.22;
-		ctx.lineCap = 'round';
-		ctx.beginPath();
-		ctx.moveTo(-r * 0.55, -r * 0.55);
-		ctx.quadraticCurveTo(-r * 1.25, -r * 1.05, -r * 1.5, -r * 0.35);
-		ctx.moveTo(r * 0.55, -r * 0.55);
-		ctx.quadraticCurveTo(r * 1.25, -r * 1.05, r * 1.5, -r * 0.35);
-		ctx.stroke();
-		// eyes
-		ctx.fillStyle = '#11100e';
-		ctx.beginPath();
-		ctx.arc(-r * 0.35, -r * 0.1, r * 0.12, 0, Math.PI * 2);
-		ctx.arc(r * 0.35, -r * 0.1, r * 0.12, 0, Math.PI * 2);
-		ctx.fill();
-		// nostrils
-		ctx.beginPath();
-		ctx.arc(-r * 0.18, r * 0.42, r * 0.07, 0, Math.PI * 2);
-		ctx.arc(r * 0.18, r * 0.42, r * 0.07, 0, Math.PI * 2);
-		ctx.fill();
+		if (bullImg.complete && bullImg.naturalWidth) {
+			const s = r * 2.35; // sprite has transparent padding; draw a touch larger
+			ctx.drawImage(bullImg, -s / 2, -s / 2, s, s);
+		} else {
+			// fallback: simple gold ball until the sprite loads
+			ctx.fillStyle = '#d4a24e';
+			ctx.beginPath();
+			ctx.arc(0, 0, r, 0, Math.PI * 2);
+			ctx.fill();
+		}
 		ctx.restore();
 	}
 
@@ -440,8 +423,49 @@
 		ctx.stroke();
 		ctx.setLineDash([]);
 
+		// bull-pen rails around the whole court (posts + double rails, gates at the goals)
+		const RAIL = '#8a6a42';
+		const RAIL_HI = '#b89363';
+		ctx.lineCap = 'butt';
+		// horizontal rails: top & bottom, two each
+		for (const y of [6, 16, H - 16, H - 6]) {
+			ctx.strokeStyle = RAIL;
+			ctx.lineWidth = 4;
+			ctx.beginPath();
+			ctx.moveTo(0, y);
+			ctx.lineTo(W, y);
+			ctx.stroke();
+			ctx.strokeStyle = RAIL_HI;
+			ctx.lineWidth = 1;
+			ctx.beginPath();
+			ctx.moveTo(0, y - 1.5);
+			ctx.lineTo(W, y - 1.5);
+			ctx.stroke();
+		}
+		// vertical rails: left & right, two each
+		for (const x of [6, 16, W - 16, W - 6]) {
+			ctx.strokeStyle = RAIL;
+			ctx.lineWidth = 4;
+			ctx.beginPath();
+			ctx.moveTo(x, 0);
+			ctx.lineTo(x, H);
+			ctx.stroke();
+			ctx.strokeStyle = RAIL_HI;
+			ctx.lineWidth = 1;
+			ctx.beginPath();
+			ctx.moveTo(x - 1.5, 0);
+			ctx.lineTo(x - 1.5, H);
+			ctx.stroke();
+		}
+		// posts
+		ctx.fillStyle = '#6e5433';
+		for (const x of [6, W / 2, W - 6])
+			for (const y of [6, H - 6]) ctx.fillRect(x - 3, y - 3, 6, 6);
+		for (const x of [6, 16, W - 16, W - 6])
+			for (const y of [H / 4, H / 2, (H * 3) / 4]) ctx.fillRect(x - 3, y - 3, 6, 6);
+
 		// fences
-		for (const [key, x] of [['left', 10], ['right', W - 10]]) {
+		for (const [key, x] of [['left', 24], ['right', W - 24]]) {
 			if (side[key].fence) {
 				ctx.strokeStyle = '#e8c547';
 				ctx.globalAlpha = 0.65 + Math.sin(now / 200) * 0.2;
