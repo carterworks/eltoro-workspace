@@ -10,9 +10,13 @@
     "dev": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
+    "test": "node --test",
+    "test:live": "node scripts/multiplayer-smoke.mjs",
     "astro": "astro"
   },
   "dependencies": {
-    "astro": "^7.3.3"
+    "astro": "^7.3.3",
+    "y-websocket": "^3.1.0",
+    "yjs": "^13.6.33"
   }
 }

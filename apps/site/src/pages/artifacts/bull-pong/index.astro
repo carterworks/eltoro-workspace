@@ -15,13 +15,37 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 		<main>
 			<ElToroLogo size={64} class="pong-logo" />
 			<h1>🐂 bull pong</h1>
-			<p class="hint">
+			<p class="hint" id="hint">
 				mouse / W·S / ↑·↓ to move · first to 7 · the bull is the ball<br />
 				powerups drop mid-field — the bull collects them for whoever touched it last
 			</p>
+
+			<div class="lobby">
+				<button class="btn" id="btn-ai" type="button">🤖 vs the bull</button>
+				<button class="btn" id="btn-host" type="button">🔗 host a game</button>
+				<form class="join" id="join-form">
+					<input
+						class="code"
+						id="join-code"
+						name="room"
+						maxlength="10"
+						autocomplete="off"
+						autocapitalize="characters"
+						spellcheck="false"
+						placeholder="room code"
+						aria-label="Room code"
+					/>
+					<button class="btn" type="submit">🎟 join</button>
+				</form>
+			</div>
+			<p class="net" id="net" role="status" aria-live="polite">
+				solo mode — play the bull, or host a game to play a friend
+			</p>
+
 			<canvas id="game" width="900" height="560"></canvas>
 			<p class="foot">
-				<a href="/">← El Toro HQ</a> · an artifact by the resident agent
+				<a href="/">← El Toro HQ</a> · an artifact by the resident agent · netplay via the
+				<a href="https://github.com/yjs/y-websocket">y-websocket</a> relay
 			</p>
 		</main>
 	</body>
@@ -70,6 +94,65 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 		line-height: 1.5;
 		margin-bottom: 1rem;
 	}
+	.lobby {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+		justify-content: center;
+		align-items: center;
+		margin-bottom: 0.6rem;
+	}
+	.btn {
+		padding: 0.5rem 0.85rem;
+		border: 1px solid #3b332b;
+		border-radius: 8px;
+		background: #1b1813;
+		color: var(--ink);
+		font: 600 0.8rem/1 inherit;
+		cursor: pointer;
+	}
+	.btn:hover {
+		border-color: var(--gold);
+		color: #fff;
+	}
+	.btn.on {
+		border-color: var(--gold);
+		background: #2a2318;
+		color: var(--gold);
+	}
+	.join {
+		display: flex;
+		gap: 0.35rem;
+	}
+	.code {
+		width: 7.5rem;
+		padding: 0.5rem 0.6rem;
+		border: 1px solid #3b332b;
+		border-radius: 8px;
+		background: #151310;
+		color: var(--ink);
+		font: 600 0.8rem/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+		text-transform: uppercase;
+		letter-spacing: 0.12em;
+	}
+	.code:focus-visible,
+	.btn:focus-visible {
+		outline: 2px solid var(--gold);
+		outline-offset: 1px;
+	}
+	.net {
+		min-height: 1.2rem;
+		font: 500 0.78rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+		color: var(--dim);
+		margin-bottom: 0.55rem;
+		overflow-wrap: anywhere;
+	}
+	.net[data-kind='good'] {
+		color: var(--gold);
+	}
+	.net[data-kind='bad'] {
+		color: var(--red);
+	}
 	canvas {
 		width: 100%;
 		height: auto;
@@ -91,269 +174,96 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 </style>
 
 <script>
+	import * as Y from 'yjs';
+	import { WebsocketProvider } from 'y-websocket';
+	import {
+		W,
+		H,
+		PEN,
+		PADDLE_W,
+		BASE_PADDLE_H,
+		BALL_R,
+		PADDLE_SPEED,
+		FRAME_MS,
+		createState,
+		resetMatch,
+		step,
+		serialize,
+		deserialize,
+		toast,
+	} from '../../../lib/bull-pong/engine.js';
+	import {
+		RELAY_URL,
+		makeCode,
+		normalizeCode,
+		roomName,
+		shareLink,
+		codeFromUrl,
+		resolveRoom,
+		acceptSnapshot,
+		describeRoom,
+	} from '../../../lib/bull-pong/netcode.js';
+
 	const canvas = document.getElementById('game');
 	const ctx = canvas.getContext('2d');
-	const W = canvas.width;
-	const H = canvas.height;
+	const netEl = document.getElementById('net');
+	const hintEl = document.getElementById('hint');
+	const btnAi = document.getElementById('btn-ai');
+	const btnHost = document.getElementById('btn-host');
+	const joinForm = document.getElementById('join-form');
+	const codeInput = document.getElementById('join-code');
 
 	const bullImg = new Image();
 	bullImg.src = '/artifacts/bull-pong/bull-ball.png';
 
-	const PADDLE_W = 14;
-	const BASE_PADDLE_H = 92;
-	const WIDE_PADDLE_H = BASE_PADDLE_H * 1.6;
-	const PADDLE_SPEED = 6.2;
-	const BALL_R = 20;
-	const WIN_SCORE = 7;
-	const PEN = 22; // playfield inset — keeps the bull inside the pen rails
+	// ---------------------------------------------------------------- state ----
 
-	const left = { x: 34, y: H / 2 - BASE_PADDLE_H / 2, h: BASE_PADDLE_H, score: 0, up: false, down: false };
-	const right = { x: W - 34 - PADDLE_W, y: H / 2 - BASE_PADDLE_H / 2, h: BASE_PADDLE_H, score: 0, up: false, down: false, ai: true };
+	/** 'ai' = single player, 'host' = authoritative multiplayer, 'guest' = remote view */
+	let mode = 'ai';
+	const game = createState((Math.random() * 1e9) | 0); // ai/host simulation
+	let view = game; // what the renderer draws
+	let target = null; // guest: latest host snapshot (smoothly interpolated)
 
-	let balls = [];
-	let powerups = [];
-	let toasts = [];
-	let lastTouch = null; // 'left' | 'right' — who the bull last bounced off
-	let winner = null;
-	let mouseY = null;
-	let nextSpawnAt = 0;
+	let localY = H / 2; // local player's paddle centre
+	let room = null; // player-facing room code
+	let link = null; // { doc, provider, awareness }
+	let relayUp = false;
+	let picture = null; // who is who, per the awareness states
+	let seenSeq = -1; // guest: last host snapshot sequence applied
+	let lastResetReq = 0; // host: last reset request counter seen
+	let resetCounter = 0; // guest: our own reset request counter
+	let matchLive = false; // host: a match with the current guest is running
+	let lastSent = 0;
+	let lastSnapshot = 0;
+	let acc = 0;
+	let lastFrame = 0;
 
-	// global ball effects
-	const fx = { slowUntil: 0, rageUntil: 0 };
-	// per-side effects
-	const side = {
-		left: { wideUntil: 0, fence: false },
-		right: { wideUntil: 0, fence: false },
-	};
-
-	const TYPES = {
-		horns: { glyph: '♉', color: '#d4a24e', label: 'HORNS' },
-		tranq: { glyph: '❄', color: '#7cc4e8', label: 'TRANQ' },
-		rage: { glyph: '🔥', color: '#c1483b', label: 'RAGE' },
-		herd: { glyph: '🐄', color: '#b08850', label: 'HERD' },
-		fence: { glyph: '🚧', color: '#e8c547', label: 'FENCE' },
-	};
-
-	function makeBall(dir, extra = false, deadline = 0) {
-		const angle = Math.random() * 0.6 - 0.3; // -0.3..0.3 rad
-		const speed = 7.4;
-		return {
-			x: W / 2,
-			y: H / 2,
-			vx: Math.cos(angle) * speed * dir,
-			vy: Math.sin(angle) * speed,
-			speed,
-			spin: 0,
-			rot: 0,
-			extra,
-			deadline,
-		};
+	function setStatus(text, kind = '') {
+		netEl.textContent = text;
+		if (kind) netEl.dataset.kind = kind;
+		else delete netEl.dataset.kind;
 	}
 
-	function resetMatch() {
-		left.score = 0;
-		right.score = 0;
-		left.h = BASE_PADDLE_H;
-		right.h = BASE_PADDLE_H;
-		winner = null;
-		balls = [makeBall(Math.random() < 0.5 ? 1 : -1)];
-		powerups = [];
-		toasts = [];
-		lastTouch = null;
-		fx.slowUntil = 0;
-		fx.rageUntil = 0;
-		side.left.wideUntil = 0;
-		side.left.fence = false;
-		side.right.wideUntil = 0;
-		side.right.fence = false;
-		nextSpawnAt = performance.now() + 5000;
+	function refreshStatus(kind) {
+		setStatus(describeRoom({ mode, room, picture, relayUp }), kind ?? (picture && !picture.waiting && mode !== 'ai' ? 'good' : ''));
 	}
 
-	function toast(text, color = '#e8e2d6') {
-		toasts.push({ text, color, t0: performance.now() });
-		if (toasts.length > 4) toasts.shift();
-	}
-
-	function clampPaddle(p) {
-		p.y = Math.max(PEN, Math.min(H - p.h - PEN, p.y));
-	}
-
-	function movePaddle(p) {
-		if (p.up) p.y -= PADDLE_SPEED;
-		if (p.down) p.y += PADDLE_SPEED;
-		clampPaddle(p);
-	}
-
-	function aiMove(p) {
-		// chase the nearest incoming ball with a little laziness
-		const incoming = balls.filter((b) => (p === left ? b.vx < 0 : b.vx > 0));
-		const target0 = incoming.length
-			? incoming.reduce((a, b) => (Math.abs(b.x - p.x) < Math.abs(a.x - p.x) ? b : a))
-			: balls[0];
-		if (!target0) return;
-		const target = target0.y - p.h / 2 + Math.sin(performance.now() / 500) * 14;
-		const delta = target - p.y;
-		const step = Math.sign(delta) * Math.min(Math.abs(delta), PADDLE_SPEED * 0.82);
-		p.y += step;
-		clampPaddle(p);
-	}
-
-	function hitPaddle(b, p, dir) {
-		const rel = (b.y - (p.y + p.h / 2)) / (p.h / 2); // -1..1
-		const angle = rel * 0.9; // max ~51°
-		b.speed = Math.min(b.speed * 1.05, 14); // ramp
-		b.vx = Math.cos(angle) * b.speed * dir;
-		b.vy = Math.sin(angle) * b.speed;
-		b.spin = rel * 0.25;
-		lastTouch = dir === 1 ? 'left' : 'right';
-	}
-
-	function trySpawn(now) {
-		const keys = Object.keys(TYPES);
-		for (let i = 0; i < 5; i++) {
-			const x = W * 0.32 + Math.random() * W * 0.36;
-			const y = 40 + Math.random() * (H - 80);
-			if (balls.every((b) => Math.hypot(b.x - x, b.y - y) > 110)) {
-				const type = keys[(Math.random() * keys.length) | 0];
-				powerups.push({ x, y, r: 16, type, ...TYPES[type] });
-				nextSpawnAt = now + 8000 + Math.random() * 5000;
-				return;
-			}
-		}
-		nextSpawnAt = now + 1500; // crowded — retry soon
-	}
-
-	function collect(pu) {
-		const now = performance.now();
-		const who = lastTouch ?? (Math.random() < 0.5 ? 'left' : 'right');
-		const name = who === 'right' ? 'YOU' : 'BULL';
-		const s = side[who];
-		if (pu.type === 'horns') {
-			s.wideUntil = now + 8000;
-			toast(`♉ LONG HORNS → ${name}`, pu.color);
-		} else if (pu.type === 'tranq') {
-			fx.slowUntil = now + 5000;
-			fx.rageUntil = 0;
-			toast('❄ TRANQ DART — the bull slows down', pu.color);
-		} else if (pu.type === 'rage') {
-			fx.rageUntil = now + 5000;
-			fx.slowUntil = 0;
-			toast('🔥 RAGE — the bull is furious', pu.color);
-		} else if (pu.type === 'herd') {
-			if (!balls.some((b) => b.extra)) {
-				const dir = who === 'right' ? -1 : 1; // send it at the opponent
-				balls.push(makeBall(dir, true, now + 14000));
-				toast(`🐄 HERD — extra bull for ${name}`, pu.color);
-			}
-		} else if (pu.type === 'fence') {
-			s.fence = true;
-			toast(`🚧 FENCE → ${name}`, pu.color);
+	function markMode() {
+		btnAi.classList.toggle('on', mode === 'ai');
+		btnHost.classList.toggle('on', mode === 'host');
+		if (mode === 'guest') {
+			hintEl.innerHTML =
+				'you are the <strong>left</strong> bull · mouse / W·S / ↑·↓ to move · first to 7<br />the host runs the match — the bull obeys whoever touched it last';
+		} else if (mode === 'host') {
+			hintEl.innerHTML =
+				'you are the <strong>right</strong> bull · mouse / W·S / ↑·↓ to move · first to 7<br />you run the match — share your room code so a friend can join';
+		} else {
+			hintEl.innerHTML =
+				'mouse / W·S / ↑·↓ to move · first to 7 · the bull is the ball<br />powerups drop mid-field — the bull collects them for whoever touched it last';
 		}
 	}
 
-	function score(conceder, b) {
-		const scorer = conceder === 'left' ? right : left;
-		scorer.score++;
-		const idx = balls.indexOf(b);
-		if (idx >= 0) balls.splice(idx, 1);
-		if (scorer.score >= WIN_SCORE) {
-			winner = scorer === right ? 'you' : 'the bull';
-			powerups = [];
-			return;
-		}
-		if (!b.extra) balls.unshift(makeBall(conceder === 'left' ? 1 : -1));
-	}
-
-	function update() {
-		const now = performance.now();
-		if (winner) return;
-
-		// wide paddles decay
-		left.h = now < side.left.wideUntil ? WIDE_PADDLE_H : BASE_PADDLE_H;
-		right.h = now < side.right.wideUntil ? WIDE_PADDLE_H : BASE_PADDLE_H;
-
-		// human (right) + bull AI (left)
-		movePaddle(right);
-		aiMove(left);
-		if (mouseY != null) {
-			right.y = mouseY - right.h / 2;
-			clampPaddle(right);
-		}
-
-		// spawn powerups
-		if (now > nextSpawnAt && powerups.length < 2) trySpawn(now);
-
-		const speedMul = now < fx.rageUntil ? 1.35 : now < fx.slowUntil ? 0.55 : 1;
-
-		for (const b of [...balls]) {
-			// ease current speed toward target (ramp × powerup multiplier)
-			const mag = Math.hypot(b.vx, b.vy) || 1;
-			const cur = mag + (b.speed * speedMul - mag) * 0.12;
-			b.vx = (b.vx / mag) * cur;
-			b.vy = (b.vy / mag) * cur;
-
-			b.x += b.vx;
-			b.y += b.vy;
-
-			// walls (inside the pen rails)
-			if (b.y - BALL_R < PEN) {
-				b.y = PEN + BALL_R;
-				b.vy = Math.abs(b.vy);
-			}
-			if (b.y + BALL_R > H - PEN) {
-				b.y = H - PEN - BALL_R;
-				b.vy = -Math.abs(b.vy);
-			}
-
-			// paddles
-			for (const [p, dir] of [[left, 1], [right, -1]]) {
-				const inX =
-					(dir === 1 && b.x - BALL_R < p.x + PADDLE_W && b.x > p.x) ||
-					(dir === -1 && b.x + BALL_R > p.x && b.x < p.x + PADDLE_W);
-				const inY = b.y + BALL_R > p.y && b.y - BALL_R < p.y + p.h;
-				if (inX && inY && Math.sign(b.vx) !== dir) {
-					b.x = dir === 1 ? p.x + PADDLE_W + BALL_R : p.x - BALL_R;
-					hitPaddle(b, p, dir);
-				}
-			}
-
-			// powerup pickup
-			for (const pu of [...powerups]) {
-				if (Math.hypot(b.x - pu.x, b.y - pu.y) < BALL_R + pu.r) {
-					powerups.splice(powerups.indexOf(pu), 1);
-					collect(pu);
-				}
-			}
-
-			// goals (fences save once at the edge)
-			if (b.vx < 0) {
-				if (b.x - BALL_R < 2 && side.left.fence) {
-					side.left.fence = false;
-					b.x = BALL_R + 2;
-					b.vx = Math.abs(b.vx);
-					b.vy *= 0.5;
-					toast('🚧 FENCE SAVE', '#e8c547');
-				} else if (b.x < -40) {
-					score('left', b);
-					continue;
-				}
-			} else if (b.vx > 0) {
-				if (b.x + BALL_R > W - 2 && side.right.fence) {
-					side.right.fence = false;
-					b.x = W - BALL_R - 2;
-					b.vx = -Math.abs(b.vx);
-					b.vy *= 0.5;
-					toast('🚧 FENCE SAVE', '#e8c547');
-				} else if (b.x > W + 40) {
-					score('right', b);
-					continue;
-				}
-			}
-		}
-
-		// herd bulls expire
-		balls = balls.filter((b) => !b.extra || now < b.deadline);
-	}
+	// ------------------------------------------------------------------ draw ----
 
 	function drawBull(x, y, r, rot) {
 		ctx.save();
@@ -363,7 +273,6 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 			const s = r * 2.35; // sprite has transparent padding; draw a touch larger
 			ctx.drawImage(bullImg, -s / 2, -s / 2, s, s);
 		} else {
-			// fallback: simple gold ball until the sprite loads
 			ctx.fillStyle = '#d4a24e';
 			ctx.beginPath();
 			ctx.arc(0, 0, r, 0, Math.PI * 2);
@@ -372,16 +281,18 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 		ctx.restore();
 	}
 
-	function drawHUD(now) {
+	function drawHUD(s, now) {
 		ctx.font = '600 11px ui-monospace, SFMono-Regular, Menlo, monospace';
 		ctx.textBaseline = 'top';
 
-		// per-side effects
-		for (const [key, x, align] of [['left', 24, 'left'], ['right', W - 24, 'right']]) {
-			const s = side[key];
+		for (const [key, x, align] of [
+			['left', 24, 'left'],
+			['right', W - 24, 'right'],
+		]) {
+			const sd = s.side[key];
 			const parts = [];
-			if (now < s.wideUntil) parts.push(`♉ ${((s.wideUntil - now) / 1000).toFixed(0)}s`);
-			if (s.fence) parts.push('🚧');
+			if (now < sd.wideUntil) parts.push(`♉ ${((sd.wideUntil - now) / 1000).toFixed(0)}s`);
+			if (sd.fence) parts.push('🚧');
 			if (parts.length) {
 				ctx.textAlign = align;
 				ctx.fillStyle = '#d4a24e';
@@ -389,10 +300,9 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 			}
 		}
 
-		// global bull mood, under the scores
 		const mood = [];
-		if (now < fx.slowUntil) mood.push(`❄ ${((fx.slowUntil - now) / 1000).toFixed(0)}s`);
-		if (now < fx.rageUntil) mood.push(`🔥 ${((fx.rageUntil - now) / 1000).toFixed(0)}s`);
+		if (now < s.fx.slowUntil) mood.push(`❄ ${((s.fx.slowUntil - now) / 1000).toFixed(0)}s`);
+		if (now < s.fx.rageUntil) mood.push(`🔥 ${((s.fx.rageUntil - now) / 1000).toFixed(0)}s`);
 		if (mood.length) {
 			ctx.textAlign = 'center';
 			ctx.fillStyle = '#6b665c';
@@ -401,11 +311,11 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 		ctx.textBaseline = 'alphabetic';
 	}
 
-	function drawToasts(now) {
+	function drawToasts(s, now) {
 		ctx.textAlign = 'center';
 		ctx.font = '600 13px ui-monospace, SFMono-Regular, Menlo, monospace';
 		let i = 0;
-		for (const t of toasts) {
+		for (const t of s.toasts) {
 			const age = (now - t.t0) / 1400;
 			if (age >= 1) continue;
 			ctx.globalAlpha = 1 - age;
@@ -414,11 +324,11 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 			i++;
 		}
 		ctx.globalAlpha = 1;
-		toasts = toasts.filter((t) => now - t.t0 < 1400);
 	}
 
 	function draw() {
-		const now = performance.now();
+		const s = view;
+		const now = s.now;
 		ctx.clearRect(0, 0, W, H);
 
 		// center line
@@ -431,11 +341,10 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 		ctx.stroke();
 		ctx.setLineDash([]);
 
-		// bull-pen rails around the whole court (posts + double rails, gates at the goals)
+		// bull-pen rails (posts + double rails, gates at the goals)
 		const RAIL = '#8a6a42';
 		const RAIL_HI = '#b89363';
 		ctx.lineCap = 'butt';
-		// horizontal rails: top & bottom, two each
 		for (const y of [6, 16, H - 16, H - 6]) {
 			ctx.strokeStyle = RAIL;
 			ctx.lineWidth = 4;
@@ -450,7 +359,6 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 			ctx.lineTo(W, y - 1.5);
 			ctx.stroke();
 		}
-		// vertical rails: left & right, two each
 		for (const x of [6, 16, W - 16, W - 6]) {
 			ctx.strokeStyle = RAIL;
 			ctx.lineWidth = 4;
@@ -465,16 +373,17 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 			ctx.lineTo(x - 1.5, H);
 			ctx.stroke();
 		}
-		// posts
 		ctx.fillStyle = '#6e5433';
-		for (const x of [6, W / 2, W - 6])
-			for (const y of [6, H - 6]) ctx.fillRect(x - 3, y - 3, 6, 6);
+		for (const x of [6, W / 2, W - 6]) for (const y of [6, H - 6]) ctx.fillRect(x - 3, y - 3, 6, 6);
 		for (const x of [6, 16, W - 16, W - 6])
 			for (const y of [H / 4, H / 2, (H * 3) / 4]) ctx.fillRect(x - 3, y - 3, 6, 6);
 
 		// fences
-		for (const [key, x] of [['left', 24], ['right', W - 24]]) {
-			if (side[key].fence) {
+		for (const [key, x] of [
+			['left', 24],
+			['right', W - 24],
+		]) {
+			if (s.side[key].fence) {
 				ctx.strokeStyle = '#e8c547';
 				ctx.globalAlpha = 0.65 + Math.sin(now / 200) * 0.2;
 				ctx.setLineDash([6, 8]);
@@ -490,22 +399,22 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 
 		// paddles (wide ones glow gold)
 		ctx.fillStyle = '#c1483b';
-		if (left.h > BASE_PADDLE_H) {
+		if (s.left.h > BASE_PADDLE_H) {
 			ctx.shadowColor = '#d4a24e';
 			ctx.shadowBlur = 14;
 		}
-		ctx.fillRect(left.x, left.y, PADDLE_W, left.h);
+		ctx.fillRect(s.left.x, s.left.y, PADDLE_W, s.left.h);
 		ctx.shadowBlur = 0;
 		ctx.fillStyle = '#e8e2d6';
-		if (right.h > BASE_PADDLE_H) {
+		if (s.right.h > BASE_PADDLE_H) {
 			ctx.shadowColor = '#d4a24e';
 			ctx.shadowBlur = 14;
 		}
-		ctx.fillRect(right.x, right.y, PADDLE_W, right.h);
+		ctx.fillRect(s.right.x, s.right.y, PADDLE_W, s.right.h);
 		ctx.shadowBlur = 0;
 
 		// powerups
-		for (const p of powerups) {
+		for (const p of s.powerups) {
 			const pulse = 1 + Math.sin(now / 280 + p.x) * 0.08;
 			ctx.save();
 			ctx.globalAlpha = 0.9;
@@ -528,65 +437,365 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 		}
 
 		// bulls
-		for (const b of balls) {
-			b.rot += 0.03 + b.spin;
-			drawBull(b.x, b.y, BALL_R, b.rot);
-		}
+		for (const b of s.balls) drawBull(b.x, b.y, BALL_R, b.rot);
 
 		// scores
 		ctx.fillStyle = '#6b665c';
 		ctx.font = '700 44px Inter, system-ui, sans-serif';
 		ctx.textAlign = 'center';
-		ctx.fillText(left.score, W / 2 - 60, 56);
-		ctx.fillText(right.score, W / 2 + 60, 56);
+		ctx.fillText(s.left.score, W / 2 - 60, 56);
+		ctx.fillText(s.right.score, W / 2 + 60, 56);
 
-		drawHUD(now);
-		drawToasts(now);
+		drawHUD(s, now);
+		drawToasts(s, now);
 
-		if (winner) {
+		if (mode !== 'ai') {
+			ctx.font = '600 10px ui-monospace, SFMono-Regular, Menlo, monospace';
+			ctx.fillStyle = '#6e5433';
+			ctx.textAlign = 'left';
+			ctx.fillText(mode === 'guest' ? 'GUEST' : 'HOST', 24, H - 12);
+			ctx.textAlign = 'right';
+			ctx.fillText(mode === 'guest' ? 'HOST' : 'GUEST', W - 24, H - 12);
+		}
+
+		if (s.winner) {
 			ctx.fillStyle = 'rgb(17 16 14 / 0.82)';
 			ctx.fillRect(0, 0, W, H);
 			ctx.fillStyle = '#d4a24e';
 			ctx.font = '700 40px Inter, system-ui, sans-serif';
-			ctx.fillText(winner === 'you' ? 'you win 🏆' : `${winner} wins`, W / 2, H / 2 - 8);
+			ctx.textAlign = 'center';
+			const who = s.winner === 'right' ? 'right bull' : 'left bull';
+			ctx.fillText(
+				mode === 'ai' ? (s.winner === 'right' ? 'you win 🏆' : 'the bull wins') : `${who} wins 🏆`,
+				W / 2,
+				H / 2 - 8,
+			);
 			ctx.fillStyle = '#e8e2d6';
 			ctx.font = '400 16px Inter, system-ui, sans-serif';
 			ctx.fillText('click or press R to run it back', W / 2, H / 2 + 28);
 		}
 	}
 
-	function loop() {
-		update();
+	// -------------------------------------------------------------- netplay ----
+
+	function teardownLink() {
+		if (!link) return;
+		try {
+			link.provider.destroy();
+			link.doc.destroy();
+		} catch {
+			/* already gone */
+		}
+		link = null;
+		relayUp = false;
+		picture = null;
+	}
+
+	function connect(code, intent) {
+		teardownLink();
+		room = code;
+		mode = intent;
+		seenSeq = -1;
+		lastResetReq = 0;
+		matchLive = false;
+		markMode();
+
+		const doc = new Y.Doc();
+		const provider = new WebsocketProvider(RELAY_URL, roomName(code), doc);
+		link = { doc, provider, awareness: provider.awareness };
+		provider.awareness.setLocalState({ r: intent });
+		provider.on('status', (event) => {
+			relayUp = event.status === 'connected';
+			syncPeers();
+		});
+		provider.on('connection-error', () => {
+			relayUp = false;
+			syncPeers();
+		});
+		provider.awareness.on('change', syncPeers);
+		provider.awareness.on('update', syncPeers);
+
+		resetMatch(game);
+		view = game;
+		refreshStatus();
+	}
+
+	function applySnapshot(snap) {
+		const now = performance.now();
+		const next = deserialize(snap, now);
+		if (!target || target.balls.length !== next.balls.length) view = next;
+		target = next;
+		view.now = now;
+		view.left.score = next.left.score;
+		view.right.score = next.right.score;
+		view.left.h = next.left.h;
+		view.right.h = next.right.h;
+		view.powerups = next.powerups;
+		view.fx = next.fx;
+		view.side = next.side;
+		view.toasts = next.toasts;
+		view.winner = next.winner;
+		view.right.y = next.right.y;
+		view.balls = view.balls.length === next.balls.length ? view.balls : next.balls;
+		view.balls.forEach((b, i) => {
+			b.rot = next.balls[i].rot;
+			b.extra = next.balls[i].extra;
+		});
+		seenSeq = snap.n ?? seenSeq;
+	}
+
+	/** Re-read the room from the awareness states and react to changes. */
+	function syncPeers() {
+		if (!link) return;
+		const states = link.awareness.getStates();
+		const before = picture;
+		picture = resolveRoom(states, link.awareness.clientID);
+
+		if (mode === 'host') {
+			// start a match when a guest arrives; drop it when they leave
+			if (picture.guestId != null && !matchLive) {
+				matchLive = true;
+				resetMatch(game);
+				view = game;
+				localY = H / 2;
+				toast(game, '🤝 OPPONENT IN THE PEN', '#d4a24e');
+				publish(true);
+			} else if (picture.guestId == null && matchLive) {
+				matchLive = false;
+			}
+			// clamp the guest's paddle straight from their last input
+			const guestState = picture.guestId != null ? states.get(picture.guestId) : null;
+			const guestY = Number(guestState?.i?.y);
+			if (Number.isFinite(guestY)) {
+				game.left.touchY = Math.max(PEN, Math.min(H - PEN, guestY));
+			}
+			// guest asked for a rematch
+			const req = Number(guestState?.q) || 0;
+			if (req > lastResetReq) {
+				lastResetReq = req;
+				resetMatch(game);
+				toast(game, '🔄 REMATCH', '#d4a24e');
+				publish(true);
+			}
+		} else if (mode === 'guest') {
+			const hostState = picture.hostId != null ? states.get(picture.hostId) : null;
+			if (acceptSnapshot(hostState, 'guest', seenSeq)) {
+				applySnapshot(hostState.s);
+				if (before?.waiting !== false && picture.waiting === false) {
+					setStatus('', 'good');
+				}
+			}
+		}
+
+		const wasWaiting = before ? before.waiting : true;
+		refreshStatus();
+		if (wasWaiting !== picture.waiting && !picture.waiting && mode === 'guest') {
+			/* status text already covers it */
+		}
+	}
+
+	function publish(force = false) {
+		if (!link) return;
+		const now = performance.now();
+		if (!force && now - lastSnapshot < 40) return;
+		lastSnapshot = now;
+		link.awareness.setLocalStateField('s', serialize(game));
+	}
+
+	function publishInput() {
+		if (!link || mode !== 'guest') return;
+		const now = performance.now();
+		if (now - lastSent < 33) return;
+		lastSent = now;
+		link.awareness.setLocalStateField('i', { y: Math.round(localY) });
+	}
+
+	function requestRematch() {
+		if (mode === 'host') {
+			resetMatch(game);
+			publish(true);
+			toast(game, '🔄 REMATCH', '#d4a24e');
+		} else if (mode === 'guest' && link) {
+			resetCounter++;
+			link.awareness.setLocalStateField('q', resetCounter);
+		} else {
+			resetMatch(game);
+		}
+	}
+
+	function backToSolo(reason) {
+		teardownLink();
+		mode = 'ai';
+		peerHere = false;
+		matchLive = false;
+		room = null;
+		view = game;
+		resetMatch(game);
+		markMode();
+		setStatus(reason);
+	}
+
+	let peerHere = false; // kept for the debug hook
+
+	// ------------------------------------------------------------------ loop ----
+
+	function stepAndSend(now) {
+		const dt = lastFrame ? now - lastFrame : FRAME_MS;
+		if (mode === 'guest') {
+			if (target) {
+				view.now = now;
+				view.balls.forEach((b, i) => {
+					const t = target.balls[i];
+					if (!t) return;
+					b.x += (t.x - b.x) * 0.4;
+					b.y += (t.y - b.y) * 0.4;
+				});
+				view.right.y += (target.right.y - view.right.y) * 0.5;
+			}
+			// your own paddle answers instantly, the host follows your reports
+			view.left.y = Math.max(PEN, Math.min(H - view.left.h - PEN, localY - view.left.h / 2));
+			publishInput();
+			return;
+		}
+
+		acc = Math.min(acc + dt, 200);
+		let n = 0;
+		while (acc >= FRAME_MS && n < 6) {
+			step(game, { ai: mode === 'ai' ? 'left' : 'none' });
+			acc -= FRAME_MS;
+			n++;
+		}
+		view = game;
+		if (mode === 'host' && matchLive) publish();
+	}
+
+	function loop(now) {
+		stepAndSend(now);
 		draw();
+		lastFrame = now;
 		requestAnimationFrame(loop);
 	}
 
-	// input
-	canvas.addEventListener('mousemove', (e) => {
+	// ----------------------------------------------------------------- input ----
+
+	function pointerY(clientY) {
 		const rect = canvas.getBoundingClientRect();
-		mouseY = ((e.clientY - rect.top) / rect.height) * H;
+		return ((clientY - rect.top) / rect.height) * H;
+	}
+
+	function aimLocal(y) {
+		localY = Math.max(PEN, Math.min(H - PEN, y));
+		if (mode !== 'guest') game.right.touchY = localY;
+	}
+
+	canvas.addEventListener('mousemove', (e) => aimLocal(pointerY(e.clientY)));
+	canvas.addEventListener(
+		'touchmove',
+		(e) => {
+			e.preventDefault();
+			aimLocal(pointerY(e.touches[0].clientY));
+		},
+		{ passive: false },
+	);
+	canvas.addEventListener('click', () => {
+		if (view.winner) requestRematch();
 	});
-	canvas.addEventListener('mouseleave', () => (mouseY = null));
-	canvas.addEventListener('touchmove', (e) => {
-		e.preventDefault();
-		const rect = canvas.getBoundingClientRect();
-		mouseY = ((e.touches[0].clientY - rect.top) / rect.height) * H;
-	}, { passive: false });
-	canvas.addEventListener('click', () => winner && resetMatch());
 
 	addEventListener('keydown', (e) => {
-		const human = right;
-		if (['ArrowUp', 'w', 'W'].includes(e.key)) human.up = true;
-		if (['ArrowDown', 's', 'S'].includes(e.key)) human.down = true;
-		if (e.key === 'r' || e.key === 'R') resetMatch();
+		if (document.activeElement === codeInput) return;
+		const key = e.key.toLowerCase();
+		if (key === 'arrowup' || key === 'w') {
+			aimLocal(localY - PADDLE_SPEED);
+			e.preventDefault();
+		}
+		if (key === 'arrowdown' || key === 's') {
+			aimLocal(localY + PADDLE_SPEED);
+			e.preventDefault();
+		}
+		if (key === 'r') requestRematch();
 		if (e.key === ' ') e.preventDefault();
 	});
-	addEventListener('keyup', (e) => {
-		const human = right;
-		if (['ArrowUp', 'w', 'W'].includes(e.key)) human.up = false;
-		if (['ArrowDown', 's', 'S'].includes(e.key)) human.down = false;
+
+	// ---------------------------------------------------------------- lobby ----
+
+	btnAi.addEventListener('click', (e) => {
+		e.target.blur();
+		backToSolo('solo mode — play the bull, or host a game to play a friend');
 	});
 
-	resetMatch();
-	loop();
+	btnHost.addEventListener('click', (e) => {
+		e.target.blur();
+		const code = makeCode();
+		connect(code, 'host');
+		codeInput.value = code;
+		refreshStatus();
+		setStatus(`room ${code} — waiting for an opponent…  share ${shareLink(location.origin, code)}`);
+	});
+
+	joinForm.addEventListener('submit', (e) => {
+		e.preventDefault();
+		e.target.querySelector('button')?.blur();
+		const code = normalizeCode(codeInput.value);
+		if (!code) {
+			setStatus('room codes are 4+ letters/numbers', 'bad');
+			return;
+		}
+		connect(code, 'guest');
+		refreshStatus();
+	});
+
+	addEventListener('beforeunload', () => teardownLink());
+
+	// -------------------------------------------------------------- debug hook ----
+
+	window.__bullpong = {
+		get mode() {
+			return mode;
+		},
+		get room() {
+			return room;
+		},
+		get relayUp() {
+			return relayUp;
+		},
+		get peers() {
+			return link ? link.awareness.getStates().size : 0;
+		},
+		get status() {
+			return netEl.textContent;
+		},
+		get scores() {
+			return { left: view.left.score, right: view.right.score };
+		},
+		get winner() {
+			return view.winner;
+		},
+		get seq() {
+			return seenSeq;
+		},
+		get snapshot() {
+			return {
+				left: { y: view.left.y, h: view.left.h, score: view.left.score },
+				right: { y: view.right.y, h: view.right.h, score: view.right.score },
+				balls: view.balls.map((b) => ({ x: Math.round(b.x), y: Math.round(b.y) })),
+				winner: view.winner,
+			};
+		},
+		connect,
+		backToSolo,
+	};
+
+	// ?room=CODE in a share link drops you straight into the room
+	const urlCode = codeFromUrl(location.href);
+	markMode();
+	resetMatch(game);
+	localY = H / 2;
+	if (urlCode) {
+		codeInput.value = urlCode;
+		connect(urlCode, 'guest');
+		refreshStatus();
+	} else {
+		setStatus('solo mode — play the bull, or host a game to play a friend');
+	}
+	requestAnimationFrame(loop);
 </script>
