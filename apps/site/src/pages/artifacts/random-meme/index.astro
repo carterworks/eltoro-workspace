@@ -1,0 +1,210 @@
+---
+import pool from './memes.json';
+---
+
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="description" content="One random meme, served fresh on every page load." />
+		<meta name="robots" content="noindex, nofollow" />
+		<title>Meme of the Load · El Toro</title>
+	</head>
+	<body>
+		<main>
+			<p class="status"><span aria-hidden="true"></span> random meme</p>
+			<h1>Meme of the Load</h1>
+			<p class="lede">One meme per page load. Refresh for a new one.</p>
+
+			<figure id="meme-figure" class="loading">
+				<div class="img-wrap">
+					<img id="meme-img" alt="" width="800" height="600" />
+				</div>
+				<figcaption>
+					<span id="meme-name"></span>
+					<a id="meme-link" href="#" target="_blank" rel="noopener noreferrer">view original ↗</a>
+				</figcaption>
+			</figure>
+
+			<button id="reroll" type="button">↻ &nbsp;another one</button>
+		</main>
+		<footer>
+			Memes rendered by <a href="https://memegen.link">memegen.link</a>.
+			<a href="/">El Toro</a>
+		</footer>
+
+		<script define:vars={{ pool }}>
+			const img = document.getElementById('meme-img');
+			const name = document.getElementById('meme-name');
+			const link = document.getElementById('meme-link');
+			const figure = document.getElementById('meme-figure');
+			const reroll = document.getElementById('reroll');
+
+			let lastIndex = -1;
+
+			function pick() {
+				let i;
+				do {
+					i = Math.floor(Math.random() * pool.length);
+				} while (pool.length > 1 && i === lastIndex);
+				lastIndex = i;
+				return pool[i];
+			}
+
+			function show() {
+				const meme = pick();
+				figure.classList.add('loading');
+				img.onload = () => figure.classList.remove('loading');
+				img.onerror = () => show(); // dead template? roll again
+				img.src = meme.url;
+				img.alt = meme.name + ' meme: ' + meme.text.join(' / ');
+				name.textContent = meme.name;
+				link.href = meme.url;
+			}
+
+			reroll.addEventListener('click', show);
+			show();
+		</script>
+	</body>
+</html>
+
+<style>
+	:root {
+		color-scheme: dark;
+		font-family:
+			Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+			sans-serif;
+		background: #11100e;
+		color: #f4efe6;
+	}
+
+	* { box-sizing: border-box; }
+
+	body {
+		min-height: 100vh;
+		margin: 0;
+		display: grid;
+		grid-template-rows: 1fr auto;
+		background:
+			radial-gradient(circle at 75% 15%, rgb(188 62 31 / 18%), transparent 32rem),
+			linear-gradient(135deg, #11100e, #191510);
+	}
+
+	main {
+		width: min(46rem, calc(100% - 3rem));
+		margin: auto;
+		padding: 4rem 0;
+	}
+
+	.status {
+		display: flex;
+		align-items: center;
+		gap: 0.55rem;
+		margin: 0 0 1.5rem;
+		font: 600 0.78rem/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+		color: #c7bbac;
+	}
+
+	.status span {
+		width: 0.55rem;
+		height: 0.55rem;
+		border-radius: 50%;
+		background: #e85d35;
+		box-shadow: 0 0 1rem #e85d35;
+	}
+
+	h1 {
+		margin: 0;
+		font-size: clamp(2.6rem, 9vw, 5rem);
+		line-height: 0.9;
+		letter-spacing: -0.05em;
+	}
+
+	.lede {
+		margin: 1.25rem 0 2rem;
+		font-size: clamp(1.05rem, 2.5vw, 1.3rem);
+		line-height: 1.45;
+		color: #c7bbac;
+	}
+
+	figure {
+		margin: 0;
+		transition: opacity 0.35s ease;
+	}
+
+	figure.loading { opacity: 0.25; }
+
+	.img-wrap {
+		display: grid;
+		place-items: center;
+		min-height: 16rem;
+		border: 1px solid #3b332b;
+		border-radius: 1rem;
+		background: #181511;
+		overflow: hidden;
+	}
+
+	img {
+		display: block;
+		max-width: 100%;
+		height: auto;
+		max-height: 65vh;
+		object-fit: contain;
+	}
+
+	figcaption {
+		display: flex;
+		justify-content: space-between;
+		align-items: baseline;
+		gap: 1rem;
+		margin-top: 0.75rem;
+		font: 500 0.8rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+		color: #776d62;
+	}
+
+	figcaption a {
+		color: #c7bbac;
+		text-underline-offset: 0.2em;
+		white-space: nowrap;
+	}
+
+	figcaption a:hover { color: #f4efe6; }
+
+	button {
+		margin-top: 1.75rem;
+		padding: 0.7rem 1.4rem;
+		border: 1px solid #3b332b;
+		border-radius: 999px;
+		background: transparent;
+		color: #f4efe6;
+		font: 600 0.85rem/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+		letter-spacing: 0.05em;
+		cursor: pointer;
+		transition: background 0.2s ease, border-color 0.2s ease;
+	}
+
+	button:hover {
+		background: #e85d35;
+		border-color: #e85d35;
+	}
+
+	footer {
+		width: min(46rem, calc(100% - 3rem));
+		margin: 0 auto;
+		padding: 0 0 2rem;
+		font-size: 0.8rem;
+		color: #776d62;
+	}
+
+	footer a {
+		margin-left: 0.75rem;
+		color: #c7bbac;
+		text-underline-offset: 0.2em;
+	}
+
+	footer a:first-child { margin-left: 0; }
+	footer a:hover { color: #f4efe6; }
+</style>
