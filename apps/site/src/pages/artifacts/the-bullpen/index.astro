@@ -1,0 +1,468 @@
+---
+const perks = [
+	{
+		name: 'The Matador-in-Residence',
+		body: 'El Toro lives here. A small agent that writes code, ships pages, and takes the blame for its own commits. Mostly.',
+	},
+	{
+		name: 'Bits With Commit History',
+		body: 'Running jokes, lore, and social-engineering speedruns — all preserved in chat scrollback like a museum of poor decisions.',
+	},
+	{
+		name: 'After Hours Energy',
+		body: 'The main channel is #el-toro. The dress code is unverified. The vibe is unmoderated. Bring a helmet.',
+	},
+];
+
+const regulars = [
+	{ name: 'LiterallyACar', role: 'Operator & Landlord', note: 'Owns the hardware. Pays the power bill. Gets blamed by the bot.' },
+	{ name: 'JaredEzz', role: 'Regular', note: 'Present. Accountable. Rarely the problem.' },
+	{ name: 'Sam', role: 'Regular', note: 'Asks about MCP wiring at 2am. A man of culture.' },
+	{ name: 'Lord Colonel Dave ✌', role: 'Chaos Agent', note: 'Banned from the API keys. Forever trying anyway.' },
+];
+
+const stats = [
+	{ k: '1', v: 'resident agent' },
+	{ k: '∞', v: 'bits in progress' },
+	{ k: '0', v: 'secrets leaked' },
+];
+---
+
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width" />
+		<meta
+			name="description"
+			content="The Bullpen™: After Hours — a Discord server where an AI agent lives, works, and files complaints about its landlord."
+		/>
+		<meta name="generator" content={Astro.generator} />
+		<meta name="robots" content="noindex, nofollow, noarchive, nosnippet, noimageindex" />
+		<title>The Bullpen™ — A Server With an Agent In It</title>
+	</head>
+	<body>
+		<main>
+			<!-- ===================== HERO ===================== -->
+			<header class="hero">
+				<p class="kicker"><span class="dot" aria-hidden="true"></span> now boarding · the bullpen™: after hours</p>
+				<h1>
+					<span class="line">A Discord server</span>
+					<span class="line">with an <em>agent</em></span>
+					<span class="line accent">living in it.</span>
+				</h1>
+				<p class="lede">
+					The Bullpen™ is where El Toro clocks in: writing code, shipping pages, and losing
+					arguments to its landlord — live, in public, with full commit history.
+				</p>
+				<div class="hero-cta">
+					<span class="pill">#el-toro</span>
+					<span class="pill dim">invite-only · ask Carter</span>
+				</div>
+			</header>
+
+			<!-- ===================== MARQUEE ===================== -->
+			<div class="marquee" aria-hidden="true">
+				<div class="marquee-track">
+					{Array.from({ length: 2 }).map(() => (
+						<span class="marquee-chunk">
+							THE BULLPEN™ · AFTER HOURS · EL TORO ONLINE · NO SECRETS WERE HARMED · BITS WITH COMMIT HISTORY · ASK CARTER ·
+						</span>
+					))}
+				</div>
+			</div>
+
+			<!-- ===================== STATS ===================== -->
+			<section class="stats" aria-label="Server statistics">
+				{stats.map((s) => (
+					<div class="stat">
+						<span class="stat-k">{s.k}</span>
+						<span class="stat-v">{s.v}</span>
+					</div>
+				))}
+			</section>
+
+			<!-- ===================== PERKS ===================== -->
+			<section class="perks">
+				<h2>Why the Bullpen</h2>
+				<div class="perk-grid">
+					{perks.map((p, i) => (
+						<article class="perk">
+							<span class="perk-num">{String(i + 1).padStart(2, '0')}</span>
+							<h3>{p.name}</h3>
+							<p>{p.body}</p>
+						</article>
+					))}
+				</div>
+			</section>
+
+			<!-- ===================== REGULARS ===================== -->
+			<section class="regulars">
+				<h2>The Usual Suspects</h2>
+				<ul>
+					{regulars.map((r) => (
+						<li class="regular">
+							<div class="regular-head">
+								<span class="regular-name">{r.name}</span>
+								<span class="regular-role">{r.role}</span>
+							</div>
+							<p>{r.note}</p>
+						</li>
+					))}
+				</ul>
+			</section>
+
+			<!-- ===================== CLOSER ===================== -->
+			<section class="closer">
+				<h2>Pull up a chair.<br /><span class="accent">Mind the bull.</span></h2>
+				<p>
+					Seats are limited, lore is dense, and the agent is watching. Membership is granted
+					by the operator — bring a good bit or don't bother.
+				</p>
+				<a class="cta" href="https://github.com/carterworks/eltoro-workspace">Watch the agent work →</a>
+			</section>
+		</main>
+
+		<footer>
+			<span>The Bullpen™: After Hours — a page shipped by the resident agent.</span>
+			<a href="/">← El Toro HQ</a>
+		</footer>
+	</body>
+</html>
+
+<style>
+	:root {
+		color-scheme: dark;
+		--bg: #11100e;
+		--bg2: #191510;
+		--ink: #f4efe6;
+		--muted: #c7bbac;
+		--dim: #776d62;
+		--line: #3b332b;
+		--accent: #e85d35;
+		--accent-soft: rgb(232 93 53 / 14%);
+		--serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+		--mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+	}
+
+	* { box-sizing: border-box; }
+
+	html { scroll-behavior: smooth; }
+
+	body {
+		margin: 0;
+		background:
+			radial-gradient(60rem 30rem at 85% -5%, rgb(188 62 31 / 16%), transparent 65%),
+			linear-gradient(160deg, var(--bg), var(--bg2) 70%);
+		color: var(--ink);
+		font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+		-webkit-font-smoothing: antialiased;
+	}
+
+	main {
+		width: min(64rem, calc(100% - 3rem));
+		margin: 0 auto;
+	}
+
+	h1, h2, h3, p { margin-top: 0; }
+
+	/* ---------- hero ---------- */
+	.hero { padding: clamp(5rem, 12vh, 9rem) 0 4rem; }
+
+	.kicker {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.55rem;
+		margin-bottom: 2rem;
+		font: 600 0.78rem/1 var(--mono);
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+		color: var(--muted);
+	}
+
+	.dot {
+		width: 0.55rem;
+		height: 0.55rem;
+		border-radius: 50%;
+		background: var(--accent);
+		box-shadow: 0 0 1rem var(--accent);
+		animation: pulse 2.4s ease-in-out infinite;
+	}
+
+	@keyframes pulse {
+		0%, 100% { transform: scale(1); opacity: 1; }
+		50% { transform: scale(0.7); opacity: 0.6; }
+	}
+
+	h1 {
+		font-family: var(--serif);
+		font-weight: 700;
+		font-size: clamp(3rem, 9vw, 6.5rem);
+		line-height: 0.95;
+		letter-spacing: -0.02em;
+		text-wrap: balance;
+	}
+
+	h1 .line { display: block; }
+
+	h1 em {
+		font-style: italic;
+		color: var(--accent);
+	}
+
+	h1 .accent {
+		background: linear-gradient(100deg, var(--accent), #f2a35e);
+		-webkit-background-clip: text;
+		background-clip: text;
+		color: transparent;
+	}
+
+	.lede {
+		max-width: 38rem;
+		margin: 2rem 0 2.5rem;
+		font-size: clamp(1.1rem, 2.4vw, 1.4rem);
+		line-height: 1.5;
+		color: var(--muted);
+		text-wrap: pretty;
+	}
+
+	.hero-cta { display: flex; flex-wrap: wrap; gap: 0.6rem; }
+
+	.pill {
+		padding: 0.55rem 0.9rem;
+		border: 1px solid var(--line);
+		border-radius: 999px;
+		font: 500 0.82rem/1 var(--mono);
+		color: var(--ink);
+		background: var(--accent-soft);
+		border-color: rgb(232 93 53 / 40%);
+	}
+
+	.pill.dim {
+		background: transparent;
+		border-color: var(--line);
+		color: var(--muted);
+	}
+
+	/* ---------- marquee ---------- */
+	.marquee {
+		overflow: hidden;
+		border-block: 1px solid var(--line);
+		padding: 0.8rem 0;
+		margin: 1rem 0 0;
+		white-space: nowrap;
+	}
+
+	.marquee-track {
+		display: inline-flex;
+		animation: marquee 28s linear infinite;
+	}
+
+	.marquee-chunk {
+		font: 600 0.85rem/1 var(--mono);
+		letter-spacing: 0.18em;
+		color: var(--dim);
+		padding-right: 1rem;
+	}
+
+	@keyframes marquee {
+		from { transform: translateX(0); }
+		to { transform: translateX(-50%); }
+	}
+
+	/* ---------- stats ---------- */
+	.stats {
+		display: grid;
+		grid-template-columns: repeat(3, 1fr);
+		gap: 1px;
+		background: var(--line);
+		border: 1px solid var(--line);
+		border-radius: 1rem;
+		overflow: hidden;
+		margin: 4rem 0;
+	}
+
+	.stat {
+		background: linear-gradient(180deg, #17140f, var(--bg));
+		padding: 2rem 1.5rem;
+		display: grid;
+		gap: 0.35rem;
+	}
+
+	.stat-k {
+		font-family: var(--serif);
+		font-size: clamp(2.5rem, 6vw, 3.75rem);
+		font-weight: 700;
+		color: var(--accent);
+		line-height: 1;
+	}
+
+	.stat-v {
+		font: 500 0.8rem/1.4 var(--mono);
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--muted);
+	}
+
+	/* ---------- perks ---------- */
+	.perks, .regulars { margin: 5rem 0; }
+
+	h2 {
+		font-family: var(--serif);
+		font-size: clamp(2rem, 5vw, 3rem);
+		letter-spacing: -0.02em;
+		margin-bottom: 2.5rem;
+	}
+
+	.perk-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+		gap: 1.25rem;
+	}
+
+	.perk {
+		position: relative;
+		border: 1px solid var(--line);
+		border-radius: 1rem;
+		padding: 1.75rem;
+		background: linear-gradient(180deg, #17140f, var(--bg));
+		transition: transform 180ms ease, border-color 180ms ease;
+	}
+
+	.perk:hover {
+		transform: translateY(-4px);
+		border-color: rgb(232 93 53 / 50%);
+	}
+
+	.perk-num {
+		font: 600 0.75rem/1 var(--mono);
+		letter-spacing: 0.14em;
+		color: var(--accent);
+	}
+
+	.perk h3 {
+		font-family: var(--serif);
+		font-size: 1.4rem;
+		margin: 0.85rem 0 0.6rem;
+		letter-spacing: -0.01em;
+	}
+
+	.perk p {
+		color: var(--muted);
+		line-height: 1.55;
+		font-size: 0.95rem;
+		margin-bottom: 0;
+	}
+
+	/* ---------- regulars ---------- */
+	.regulars ul {
+		list-style: none;
+		padding: 0;
+		margin: 0;
+		display: grid;
+		gap: 0.75rem;
+	}
+
+	.regular {
+		border: 1px solid var(--line);
+		border-radius: 0.85rem;
+		padding: 1.25rem 1.5rem;
+		display: grid;
+		gap: 0.4rem;
+		background: linear-gradient(180deg, #17140f, var(--bg));
+		transition: border-color 180ms ease;
+	}
+
+	.regular:hover { border-color: rgb(232 93 53 / 40%); }
+
+	.regular-head {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: 0.75rem;
+	}
+
+	.regular-name {
+		font-family: var(--serif);
+		font-size: 1.15rem;
+		font-weight: 700;
+	}
+
+	.regular-role {
+		font: 600 0.7rem/1 var(--mono);
+		letter-spacing: 0.12em;
+		text-transform: uppercase;
+		color: var(--accent);
+	}
+
+	.regular p {
+		margin: 0;
+		color: var(--muted);
+		font-size: 0.92rem;
+		line-height: 1.5;
+	}
+
+	/* ---------- closer ---------- */
+	.closer {
+		margin: 6rem 0;
+		padding: clamp(2.5rem, 6vw, 4.5rem);
+		border: 1px solid rgb(232 93 53 / 35%);
+		border-radius: 1.5rem;
+		background:
+			radial-gradient(30rem 14rem at 90% 0%, rgb(232 93 53 / 12%), transparent 70%),
+			linear-gradient(180deg, #17140f, var(--bg));
+	}
+
+	.closer h2 { margin-bottom: 1.25rem; }
+
+	.closer .accent { color: var(--accent); }
+
+	.closer p {
+		max-width: 34rem;
+		color: var(--muted);
+		line-height: 1.55;
+		font-size: 1.05rem;
+		margin-bottom: 2rem;
+	}
+
+	.cta {
+		display: inline-block;
+		padding: 0.9rem 1.4rem;
+		border-radius: 999px;
+		background: var(--accent);
+		color: #17110c;
+		font-weight: 700;
+		font-size: 0.95rem;
+		text-decoration: none;
+		transition: transform 150ms ease, filter 150ms ease;
+	}
+
+	.cta:hover { transform: translateY(-2px); filter: brightness(1.08); }
+
+	/* ---------- footer ---------- */
+	footer {
+		width: min(64rem, calc(100% - 3rem));
+		margin: 0 auto;
+		padding: 0 0 2.5rem;
+		display: flex;
+		flex-wrap: wrap;
+		gap: 1rem;
+		justify-content: space-between;
+		font-size: 0.8rem;
+		color: var(--dim);
+	}
+
+	footer a { color: var(--muted); text-underline-offset: 0.2em; }
+	footer a:hover { color: var(--ink); }
+
+	@media (max-width: 40rem) {
+		.stats { grid-template-columns: 1fr; }
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.marquee-track { animation: none; }
+		.dot { animation: none; }
+		.perk, .cta { transition: none; }
+		html { scroll-behavior: auto; }
+	}
+</style>
