@@ -140,6 +140,11 @@ test('status lines describe every stage of the lobby', () => {
 		/both bulls in the pen|opponent in the pen/,
 	);
 	assert.match(describeRoom({ ...base, relayUp: false }), /relay unreachable/);
+	assert.match(describeRoom({ ...base, relayUp: null }), /knocking on the relay/);
+	assert.match(
+		describeRoom({ ...base, picture: resolveRoom(new Map([[1, { r: 'host' }]]), 1), link: 'https://x/artifacts/bull-pong/?room=AB12' }),
+		/share https:\/\/x\/artifacts\/bull-pong\/\?room=AB12/,
+	);
 	assert.match(
 		describeRoom({
 			mode: 'guest',

@@ -222,17 +222,20 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 	let mode = 'ai';
 	const game = createState((Math.random() * 1e9) | 0); // ai/host simulation
 	let view = game; // what the renderer draws
-	let target = null; // guest: latest host snapshot (smoothly interpolated)
+	let target = null; // guest: latest host snapshot (extrapolated against snapAt)
+	let snapAt = 0; // guest: when that snapshot landed
 
 	let localY = H / 2; // local player's paddle centre
 	let room = null; // player-facing room code
 	let link = null; // { doc, provider, awareness }
-	let relayUp = false;
+	let relayUp = null;
 	let picture = null; // who is who, per the awareness states
 	let seenSeq = -1; // guest: last host snapshot sequence applied
 	let lastResetReq = 0; // host: last reset request counter seen
 	let resetCounter = 0; // guest: our own reset request counter
 	let matchLive = false; // host: a match with the current guest is running
+	let lastGuestSignal = 0; // host: last awareness update from the seated guest
+	let lastHostSignal = 0; // guest: last snapshot from the host
 	let lastSent = 0;
 	let lastSnapshot = 0;
 	let acc = 0;
@@ -245,7 +248,11 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 	}
 
 	function refreshStatus(kind) {
-		setStatus(describeRoom({ mode, room, picture, relayUp }), kind ?? (picture && !picture.waiting && mode !== 'ai' ? 'good' : ''));
+		const link = room ? shareLink(location.origin, room) : null;
+		setStatus(
+			describeRoom({ mode, room, picture, relayUp, link }),
+			kind ?? (picture && !picture.waiting && mode !== 'ai' ? 'good' : ''),
+		);
 	}
 
 	function markMode() {
@@ -505,7 +512,7 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 		link = { doc, provider, awareness: provider.awareness };
 		provider.awareness.setLocalState({ r: intent });
 		provider.on('status', (event) => {
-			relayUp = event.status === 'connected';
+			relayUp = event.status === 'connected' ? true : event.status === 'connecting' ? null : false;
 			syncPeers();
 		});
 		provider.on('connection-error', () => {
@@ -513,11 +520,18 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 			syncPeers();
 		});
 		provider.awareness.on('change', syncPeers);
-		provider.awareness.on('update', syncPeers);
+		provider.awareness.on('update', (changes) => {
+			const now = performance.now();
+			if (mode === 'host' && picture?.guestId != null) {
+				const fromGuest = [...(changes?.added ?? []), ...(changes?.updated ?? [])];
+				if (fromGuest.includes(picture.guestId)) lastGuestSignal = now;
+			}
+			syncPeers();
+		});
 
 		resetMatch(game);
 		view = game;
-		refreshStatus();
+		setStatus(describeRoom({ mode, room, picture: null, relayUp: null }));
 	}
 
 	function applySnapshot(snap) {
@@ -525,6 +539,8 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 		const next = deserialize(snap, now);
 		if (!target || target.balls.length !== next.balls.length) view = next;
 		target = next;
+		snapAt = now;
+		lastHostSignal = now;
 		view.now = now;
 		view.left.score = next.left.score;
 		view.right.score = next.right.score;
@@ -550,11 +566,13 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 		const states = link.awareness.getStates();
 		const before = picture;
 		picture = resolveRoom(states, link.awareness.clientID);
+		peerHere = mode === 'host' ? picture.guestId != null : picture.hostId != null;
 
 		if (mode === 'host') {
 			// start a match when a guest arrives; drop it when they leave
 			if (picture.guestId != null && !matchLive) {
 				matchLive = true;
+				lastGuestSignal = performance.now();
 				resetMatch(game);
 				view = game;
 				localY = H / 2;
@@ -644,11 +662,16 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 		if (mode === 'guest') {
 			if (target) {
 				view.now = now;
+				// extrapolate from the last snapshot with the bull's own velocity,
+				// so the guest sees the bull where the host has it now (not 80ms ago)
+				const elapsedFrames = Math.min(now - snapAt, 200) / FRAME_MS;
 				view.balls.forEach((b, i) => {
 					const t = target.balls[i];
 					if (!t) return;
-					b.x += (t.x - b.x) * 0.4;
-					b.y += (t.y - b.y) * 0.4;
+					const px = t.x + t.vx * elapsedFrames;
+					const py = t.y + t.vy * elapsedFrames;
+					b.x += (px - b.x) * 0.5;
+					b.y += (py - b.y) * 0.5;
 				});
 				view.right.y += (target.right.y - view.right.y) * 0.5;
 			}
@@ -726,10 +749,9 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 	btnHost.addEventListener('click', (e) => {
 		e.target.blur();
 		const code = makeCode();
-		connect(code, 'host');
 		codeInput.value = code;
+		connect(code, 'host');
 		refreshStatus();
-		setStatus(`room ${code} — waiting for an opponent…  share ${shareLink(location.origin, code)}`);
 	});
 
 	joinForm.addEventListener('submit', (e) => {
@@ -761,6 +783,11 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 		get peers() {
 			return link ? link.awareness.getStates().size : 0;
 		},
+		get peerStates() {
+			return link
+				? [...link.awareness.getStates()].map(([id, s]) => ({ id, r: s?.r, i: s?.i, q: s?.q, hasSnapshot: !!s?.s }))
+				: [];
+		},
 		get status() {
 			return netEl.textContent;
 		},
@@ -781,6 +808,13 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 				winner: view.winner,
 			};
 		},
+		get netDebug() {
+			return {
+				snapshotAgeMs: snapAt ? Math.round(performance.now() - snapAt) : null,
+				targetBall: target?.balls?.[0] ? { x: target.balls[0].x, y: target.balls[0].y, vx: target.balls[0].vx } : null,
+				viewBall: view.balls[0] ? { x: Math.round(view.balls[0].x), y: Math.round(view.balls[0].y) } : null,
+			};
+		},
 		connect,
 		backToSolo,
 	};
@@ -798,4 +832,17 @@ import ElToroLogo from '../../../components/ElToroLogo.astro';
 		setStatus('solo mode — play the bull, or host a game to play a friend');
 	}
 	requestAnimationFrame(loop);
+
+	// A player who stops talking for 4s has gone: the awareness protocol's own
+	// timeout is 30s, far too long to keep a seat warm mid-match.
+	setInterval(() => {
+		const now = performance.now();
+		if (mode === 'host' && matchLive && now - lastGuestSignal > 4000) {
+			matchLive = false;
+			if (picture) picture = { ...picture, guestId: null, waiting: true };
+			refreshStatus('bad');
+		} else if (mode === 'guest' && peerHere && now - lastHostSignal > 4000) {
+			setStatus('the host went quiet — waiting for them to come back…', 'bad');
+		}
+	}, 1000);
 </script>

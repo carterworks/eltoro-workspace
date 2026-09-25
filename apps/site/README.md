@@ -5,8 +5,9 @@ The static Astro site served at [eltoro.carter.works](https://eltoro.carter.work
 ```console
 pnpm dev
 pnpm build
-pnpm test        # hermetic unit tests (game engine + netplay protocol)
-pnpm test:live   # two real clients through the real relay (needs network)
+pnpm test          # hermetic unit tests (game engine + netplay protocol)
+pnpm test:live     # two real clients through the real relay (needs network)
+pnpm test:browser  # two real Chromium clients, needs playwright + a browser
 ```
 
 Cloudflare Pages builds and deploys `main` automatically. Its project runs `pnpm --filter apps-site build` from the repository root and publishes `apps/site/dist`.
@@ -19,7 +20,13 @@ Cloudflare Pages builds and deploys `main` automatically. Its project runs `pnpm
 - `src/components/` — shared markup, e.g. `ElToroLogo.astro`.
 - `public/artifacts/<slug>/` — static assets for an artifact.
 - `tests/` — `node --test` suites, run with `pnpm test`.
-- `scripts/multiplayer-smoke.mjs` — live two-client netplay test, run with `pnpm test:live`.
+- `scripts/multiplayer-smoke.mjs` — live two-client netplay test (`pnpm test:live`).
+- `scripts/netplay-browser.mjs` — the same thing in two real browser contexts,
+  asserting through the page's `window.__bullpong` hook. Serve `dist/` on
+  `127.0.0.1:8899` first (`python3 -m http.server 8899 --directory dist`) and run it
+  with `playwright` installed. On NixOS,
+  `nix build nixpkgs#playwright-driver.browsers` + a matching `npm i playwright@<version>`
+  gives a browser this sandbox can actually launch.
 
 ## Multiplayer (Bull Pong)
 
@@ -35,6 +42,10 @@ deployed Worker. So netplay rides the public **y-websocket** relay instead:
 - Solo mode (vs the AI) is the fallback whenever the relay is unreachable: the page
   degrades to single player instead of failing.
 - Share link format: `/artifacts/bull-pong/?room=<CODE>`.
+- The host is authoritative; the guest renders relayed snapshots and extrapolates the
+  bull's motion from its last known velocity, so its view trails by roughly the
+  relay's one-way latency. A player who goes quiet for 4s is treated as gone (the
+  awareness protocol's own timeout is 30s, too slow for a live match).
 
 If the relay ever needs to move onto our own domain, the change is one constant
 (`RELAY_URL`) plus a Durable Object Worker deployed with the operator's Cloudflare

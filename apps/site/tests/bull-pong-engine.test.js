@@ -162,6 +162,7 @@ test('snapshots round-trip: scores, effects, toasts and paddles survive the wire
 	assert.equal(peer.balls.length, 1);
 	assert.equal(peer.powerups.length, 0);
 	assert.equal(peer.left.h, s.left.h);
+	assert.ok(Math.abs(peer.balls[0].vx - s.balls[0].vx) < 0.01, 'the bull keeps its velocity for guest extrapolation');
 	assert.equal(peer.side.right.fence, true, 'the fence the bull collected shows for the guest');
 	const snap2 = JSON.parse(JSON.stringify(snap));
 	assert.ok(snap2.sloo >= 0 && snap2.rage >= 0 && snap2.wl >= 0 && snap2.wr >= 0);

@@ -12,6 +12,7 @@
     "preview": "astro preview",
     "test": "node --test",
     "test:live": "node scripts/multiplayer-smoke.mjs",
+    "test:browser": "node scripts/netplay-browser.mjs",
     "astro": "astro"
   },
   "dependencies": {

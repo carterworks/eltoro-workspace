@@ -325,7 +325,7 @@ export function serialize(state) {
 		n: state.seq,
 		l: { y: r2(state.left.y), h: state.left.h, s: state.left.score },
 		r: { y: r2(state.right.y), h: state.right.h, s: state.right.score },
-		b: state.balls.map((b) => ({ x: r2(b.x), y: r2(b.y), rot: r2(b.rot), e: b.extra ? 1 : 0 })),
+		b: state.balls.map((b) => ({ x: r2(b.x), y: r2(b.y), rot: r2(b.rot), e: b.extra ? 1 : 0, vx: r2(b.vx), vy: r2(b.vy) })),
 		p: state.powerups.map((p) => ({ x: r2(p.x), y: r2(p.y), t: p.type })),
 		sloo: Math.max(0, state.fx.slowUntil - state.now) | 0,
 		rage: Math.max(0, state.fx.rageUntil - state.now) | 0,
@@ -354,7 +354,15 @@ export function deserialize(snap, now = 0) {
 			down: false,
 			touchY: null,
 		},
-		balls: snap.b.map((b) => ({ x: b.x, y: b.y, vx: 0, vy: 0, rot: b.rot, spin: 0, extra: !!b.e })),
+		balls: snap.b.map((b) => ({
+			x: b.x,
+			y: b.y,
+			vx: b.vx ?? 0, // per-frame velocity, so the guest can extrapolate
+			vy: b.vy ?? 0,
+			rot: b.rot,
+			spin: 0,
+			extra: !!b.e,
+		})),
 		powerups: snap.p.map((p) => ({ x: p.x, y: p.y, r: 16, type: p.t, ...TYPES[p.t] })),
 		fx: { slowUntil: now + snap.sloo, rageUntil: now + snap.rage },
 		side: {

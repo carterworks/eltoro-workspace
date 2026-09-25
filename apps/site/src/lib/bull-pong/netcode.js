@@ -96,13 +96,14 @@ export function acceptSnapshot(fromState, role, seenSeq) {
 }
 
 /** Human-readable status line for the current room picture. */
-export function describeRoom({ mode, room, picture, relayUp }) {
+export function describeRoom({ mode, room, picture, relayUp, link }) {
 	if (mode === 'ai') return 'solo mode — play the bull, or host a game to play a friend';
 	if (!room) return 'solo mode';
-	if (!relayUp) return `relay unreachable — retrying for room ${room}…`;
+	if (relayUp === false) return `relay unreachable — retrying for room ${room}…`;
+	if (relayUp == null) return `room ${room} — knocking on the relay…`;
 	if (picture?.selfIsSpectator) return `room ${room} — two bulls already in the pen, you are spectating`;
 	if (mode === 'host') {
-		if (picture?.waiting) return `room ${room} — waiting for an opponent…`;
+		if (picture?.waiting) return `room ${room} — waiting for an opponent…${link ? `  share ${link}` : ''}`;
 		return `opponent in the pen — room ${room}. mind the bull.`;
 	}
 	if (picture?.waiting) return `room ${room} — connected, waiting for the host's first serve…`;

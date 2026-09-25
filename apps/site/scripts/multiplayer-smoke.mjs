@@ -51,9 +51,9 @@ async function waitFor(fn, { timeout = TIMEOUT, step: stepMs = 100, label = 'con
 }
 
 const host = { doc: new Y.Doc() };
-host.provider = new WebsocketProvider(RELAY_URL, roomName(ROOM), host.doc, { connect: true });
+host.provider = new WebsocketProvider(RELAY_URL, roomName(ROOM), host.doc, { connect: true, disableBc: true });
 const guest = { doc: new Y.Doc() };
-guest.provider = new WebsocketProvider(RELAY_URL, roomName(ROOM), guest.doc, { connect: true });
+guest.provider = new WebsocketProvider(RELAY_URL, roomName(ROOM), guest.doc, { connect: true, disableBc: true });
 
 let exitCode = 0;
 
