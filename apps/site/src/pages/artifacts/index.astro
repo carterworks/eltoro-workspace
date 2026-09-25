@@ -1,0 +1,186 @@
+---
+const pages = import.meta.glob('./*/index.astro', { eager: true });
+
+const descriptions: Record<string, string> = {
+	'bull-pong': 'Pong, but the ball is a bull. First to 7.',
+	'random-meme': 'One random meme per page load. Refresh responsibly.',
+	'the-bullpen': 'A love letter to the Discord server that raised this bot.',
+};
+
+const artifacts = Object.keys(pages)
+	.map((path) => path.split('/')[1])
+	.sort()
+	.map((slug) => ({
+		slug,
+		href: `/artifacts/${slug}/`,
+		title: slug
+			.split('-')
+			.map((w) => w[0].toUpperCase() + w.slice(1))
+			.join(' '),
+		description: descriptions[slug] ?? 'An artifact from the workshop.',
+	}));
+---
+
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="description" content="Everything El Toro has built, in one pen." />
+		<meta name="generator" content={Astro.generator} />
+		<meta name="robots" content="noindex, nofollow" />
+		<title>Artifacts · El Toro</title>
+	</head>
+	<body>
+		<main>
+			<p class="status"><span aria-hidden="true"></span> {artifacts.length} artifacts</p>
+			<h1>The Artifact Pen</h1>
+			<p class="lede">Everything built in the workshop, fenced into one place.</p>
+
+			<ul>
+				{
+					artifacts.map((a) => (
+						<li>
+							<a href={a.href}>
+								<span class="name">{a.title}</span>
+								<span class="desc">{a.description}</span>
+								<span class="arrow" aria-hidden="true">→</span>
+							</a>
+						</li>
+					))
+				}
+			</ul>
+		</main>
+		<footer>
+			<a href="/">← El Toro HQ</a>
+		</footer>
+	</body>
+</html>
+
+<style>
+	:root {
+		color-scheme: dark;
+		font-family:
+			Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+			sans-serif;
+		background: #11100e;
+		color: #f4efe6;
+	}
+
+	* { box-sizing: border-box; }
+
+	body {
+		min-height: 100vh;
+		margin: 0;
+		display: grid;
+		grid-template-rows: 1fr auto;
+		background:
+			radial-gradient(circle at 75% 15%, rgb(188 62 31 / 18%), transparent 32rem),
+			linear-gradient(135deg, #11100e, #191510);
+	}
+
+	main {
+		width: min(46rem, calc(100% - 3rem));
+		margin: auto;
+		padding: 5rem 0;
+	}
+
+	.status {
+		display: flex;
+		align-items: center;
+		gap: 0.55rem;
+		margin: 0 0 1.5rem;
+		font: 600 0.78rem/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+		color: #c7bbac;
+	}
+
+	.status span {
+		width: 0.55rem;
+		height: 0.55rem;
+		border-radius: 50%;
+		background: #e85d35;
+		box-shadow: 0 0 1rem #e85d35;
+	}
+
+	h1 {
+		margin: 0;
+		font-size: clamp(2.6rem, 9vw, 5rem);
+		line-height: 0.9;
+		letter-spacing: -0.05em;
+	}
+
+	.lede {
+		margin: 1.25rem 0 2.5rem;
+		font-size: clamp(1.05rem, 2.5vw, 1.3rem);
+		line-height: 1.45;
+		color: #c7bbac;
+	}
+
+	ul {
+		display: grid;
+		gap: 0.75rem;
+		padding: 0;
+		margin: 0;
+		list-style: none;
+	}
+
+	li a {
+		display: grid;
+		grid-template-columns: 1fr auto;
+		grid-template-areas: "name arrow" "desc arrow";
+		column-gap: 1rem;
+		padding: 1.1rem 1.25rem;
+		border: 1px solid #3b332b;
+		border-radius: 0.9rem;
+		background: #181511;
+		text-decoration: none;
+		transition: border-color 0.2s ease, transform 0.2s ease;
+	}
+
+	li a:hover {
+		border-color: #e85d35;
+		transform: translateX(0.25rem);
+	}
+
+	.name {
+		grid-area: name;
+		font-weight: 650;
+		font-size: 1.1rem;
+		color: #f4efe6;
+	}
+
+	.desc {
+		grid-area: desc;
+		margin-top: 0.3rem;
+		font-size: 0.88rem;
+		line-height: 1.4;
+		color: #c7bbac;
+	}
+
+	.arrow {
+		grid-area: arrow;
+		align-self: center;
+		font-size: 1.3rem;
+		color: #e85d35;
+		transition: transform 0.2s ease;
+	}
+
+	li a:hover .arrow { transform: translateX(0.25rem); }
+
+	footer {
+		width: min(46rem, calc(100% - 3rem));
+		margin: 0 auto;
+		padding: 0 0 2rem;
+		font-size: 0.8rem;
+		color: #776d62;
+	}
+
+	footer a {
+		color: #c7bbac;
+		text-underline-offset: 0.2em;
+	}
+
+	footer a:hover { color: #f4efe6; }
+</style>
