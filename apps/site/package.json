@@ -13,11 +13,18 @@
     "test": "node --test",
     "test:live": "node scripts/multiplayer-smoke.mjs",
     "test:browser": "node scripts/netplay-browser.mjs",
+    "deploy": "alchemy deploy",
     "astro": "astro"
   },
   "dependencies": {
     "astro": "^7.3.3",
     "y-websocket": "^3.1.0",
     "yjs": "^13.6.33"
+  },
+  "devDependencies": {
+    "@effect/platform-node": "4.0.3",
+    "alchemy": "2.0.0-beta.81",
+    "effect": "4.0.3",
+    "typescript": "6.0.3"
   }
 }
