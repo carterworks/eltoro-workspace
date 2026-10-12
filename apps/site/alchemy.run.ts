@@ -8,7 +8,7 @@
  *
  * Deploy from `apps/site` with `pnpm run deploy`. The `prod` stage also wires
  * the custom domain by adopting the pre-existing `carter.works` zone, the
- * `eltoro-site.carter.works` DNS record, and its Worker route.
+ * `eltoro.carter.works` DNS record, and its Worker route.
  */
 import { adopt } from "alchemy/AdoptPolicy";
 import * as Alchemy from "alchemy";
@@ -43,7 +43,7 @@ export default Alchemy.Stack(
       // workers.dev origin against Cloudflare before the first deploy.
       yield* Cloudflare.DNS.Record("ElToroSiteApex", {
         zoneId: zone.zoneId,
-        name: "eltoro-site.carter.works",
+        name: "eltoro.carter.works",
         type: "CNAME",
         content: "eltoro-site.carterworks.workers.dev",
         proxied: true,
@@ -51,7 +51,7 @@ export default Alchemy.Stack(
 
       yield* Cloudflare.Workers.WorkerRoute("ElToroSiteRoute", {
         zoneId: zone.zoneId,
-        pattern: "eltoro-site.carter.works/*",
+        pattern: "eltoro.carter.works/*",
         script: site.workerName,
       }).pipe(adopt(true));
     }
