@@ -10,7 +10,23 @@ pnpm test:live     # two real clients through the real relay (needs network)
 pnpm test:browser  # two real Chromium clients, needs playwright + a browser
 ```
 
-Cloudflare Pages builds and deploys `main` automatically. Its project runs `pnpm --filter apps-site build` from the repository root and publishes `apps/site/dist`.
+## Deployment
+
+The site deploys to Cloudflare as a Worker serving static assets, defined in
+[`alchemy.run.ts`](./alchemy.run.ts). Alchemy runs the app's `build` script,
+hashes `dist/`, and uploads it.
+
+```console
+pnpm run deploy
+```
+
+Locally, authenticate first with `pnpm exec alchemy profile edit`. CI runs
+`alchemy deploy --stage prod` from `apps/site` using `CLOUDFLARE_API_TOKEN` and
+`CLOUDFLARE_ACCOUNT_ID`.
+
+The `prod` stage also adopts the pre-existing `carter.works` zone, the
+`eltoro.carter.works` DNS record, and the Worker route that serves it. Confirm
+the DNS record content against Cloudflare before the first deploy.
 
 ## Structure
 
