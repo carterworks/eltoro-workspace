@@ -16,3 +16,4 @@ build/
 .svelte-kit/
 .wrangler/
 .wrangler-dry-run/
+.alchemy/
